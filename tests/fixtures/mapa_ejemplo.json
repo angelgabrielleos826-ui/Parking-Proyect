@@ -1,0 +1,11 @@
+{
+    "niveles": [
+        {"id_nivel": "N1", "numero_nivel": 1},
+        {"id_nivel": "N2", "numero_nivel": 2}
+    ],
+    "cajones": [
+        {"id_nivel": "N1", "id_cajon": "C-001", "fila_cajon": 0, "column_cajon": 0},
+        {"id_nivel": "N1", "id_cajon": "C-002", "fila_cajon": 0, "column_cajon": 1},
+        {"id_nivel": "N2", "id_cajon": "C-003", "fila_cajon": 1, "column_cajon": 0}
+    ]
+}
