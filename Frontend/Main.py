@@ -1,554 +1,609 @@
+import math
+import os
+
 from kivy.app import App
+from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
+from kivy.utils import platform
 from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition, FadeTransition
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.stencilview import StencilView
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
 from kivy.uix.behaviors import ButtonBehavior
-from kivy.graphics import Color, RoundedRectangle, Rectangle, Line, Ellipse
+from kivy.graphics import (Color, RoundedRectangle, Rectangle, Line, Ellipse,
+                           InstructionGroup)
 from kivy.clock import Clock
-from kivy.properties import ListProperty, StringProperty, BooleanProperty
+from kivy.properties import (ListProperty, StringProperty, BooleanProperty,
+                             NumericProperty)
 from kivy.metrics import dp
 from kivy.animation import Animation
- 
+from kivy.storage.jsonstore import JsonStore
+
 # ----------------------------------------------------------------------
 # Paleta de colores
 # ----------------------------------------------------------------------
 COLOR_BG = (0.043, 0.055, 0.098, 1)          # fondo azul-negro
-COLOR_CARD = (0.098, 0.114, 0.161, 1)        # tarjetas
-COLOR_CARD_LIGHT = (0.145, 0.165, 0.220, 1)  # tarjetas resaltadas / inputs
+COLOR_CANVAS = (0.063, 0.075, 0.110, 1)      # fondo del mapa
+COLOR_CARD = (0.098, 0.114, 0.161, 1)        # tarjetas / cajones
+COLOR_CARD_LIGHT = (0.145, 0.165, 0.220, 1)  # bordes / inputs
 COLOR_BORDER = (0.220, 0.240, 0.290, 1)      # bordes sutiles
-COLOR_GOLD = (0.949, 0.729, 0.078, 1)        # botones principales / acentos
-COLOR_GOLD_DARK = (0.20, 0.17, 0.06, 1)      # fondo icono splash
-COLOR_TEXT = (0.937, 0.941, 0.949, 1)        # texto principal (blanco)
-COLOR_TEXT_MUTED = (0.560, 0.588, 0.650, 1)  # texto secundario gris
-COLOR_RED = (0.898, 0.263, 0.263, 1)         # botones de borrar / alerta
-COLOR_GREEN = (0.298, 0.808, 0.400, 1)       # estados de éxito
- 
+COLOR_GOLD = (0.949, 0.729, 0.078, 1)        # acentos
+COLOR_GOLD_DARK = (0.20, 0.17, 0.06, 1)      # fondo dorado tenue
+COLOR_TEXT = (0.937, 0.941, 0.949, 1)        # texto principal
+COLOR_TEXT_MUTED = (0.560, 0.588, 0.650, 1)  # texto secundario
+COLOR_RED = (0.898, 0.263, 0.263, 1)         # borrar / alerta
+COLOR_GREEN = (0.298, 0.808, 0.400, 1)       # exito
+
 Window.clearcolor = COLOR_BG
- 
- 
+if platform in ("win", "linux", "macosx"):
+    Window.size = (390, 800)  # tamano de celular para probar en escritorio
+
+
 # ----------------------------------------------------------------------
-# Widgets reutilizables con esquinas redondeadas
+# DATOS DEL ESTACIONAMIENTO (plano del "Mapa cargado")
+# El plano se define en horizontal (640 x 400) y se dibuja girado 90°.
+# Cada cajon: (x, y, ancho, alto) en unidades del plano horizontal.
+# ----------------------------------------------------------------------
+FILAS = {"A": 16, "B": 9, "C": 9, "D": 8, "E": 2, "F": 11}
+
+
+def _build_spots():
+    s = {}
+    for i in range(16):                                   # Fila A: lateral derecho
+        s[f"A-{i + 1:02d}"] = (32 + 36 * i, 8, 30, 46)
+    for i in range(9):                                    # Fila B (arriba) / C (abajo)
+        s[f"B-{i + 1:02d}"] = (8, 70 + 33 * i, 48, 29)
+        s[f"C-{i + 1:02d}"] = (584, 70 + 33 * i, 48, 29)
+    for i in range(4):                                    # Fila D: centro
+        s[f"D-{i + 1:02d}"] = (130, 110 + 33 * i, 48, 29)
+        s[f"D-{i + 5:02d}"] = (274, 110 + 33 * i, 48, 29)
+    s["E-01"] = (196, 110, 30, 46)                        # Fila E
+    s["E-02"] = (234, 110, 30, 46)
+    for i in range(5):                                    # Fila F
+        s[f"F-{i + 1:02d}"] = (372, 110 + 33 * i, 48, 29)
+    for i in range(6):
+        s[f"F-{i + 6:02d}"] = (452, 110 + 33 * i, 48, 29)
+    return s
+
+
+SPOTS = _build_spots()
+
+# Referencias: (texto, x, y, es_acceso) -> centro en el plano horizontal
+REFS = [
+    ("Escalera B", 100, 365, False),
+    ("Caseta\nde pago", 226, 365, True),
+    ("Salida\npeatonal", 354, 365, False),
+    ("Escalera A", 479, 365, False),
+    ("Elevador 2", 546, 330, False),
+    ("Entrada\nPlaza Norte", 546, 215, True),
+]
+
+SRC_H = 400.0                    # alto del plano horizontal
+PLAN_W, PLAN_H = 400.0, 640.0    # tamano del plano ya girado (vertical)
+
+
+def near_refs(spot, n=2):
+    """Las n referencias (no accesos) mas cercanas a un cajon: 'Cerca de: ...'."""
+    sx, sy, sw, sh = SPOTS[spot]
+    cx, cy = sx + sw / 2, sy + sh / 2
+    cands = [r for r in REFS if not r[3]]
+    ranked = sorted(cands, key=lambda r: (r[1] - cx) ** 2 + (r[2] - cy) ** 2)
+    return ", ".join(r[0].replace("\n", " ") for r in ranked[:n])
+
+
+# ----------------------------------------------------------------------
+# Widgets reutilizables
 # ----------------------------------------------------------------------
 class RoundedBox(BoxLayout):
-    """BoxLayout con fondo de color y esquinas redondeadas. Admite borde opcional."""
+    """BoxLayout con fondo redondeado y borde opcional."""
     bg_color = ListProperty(COLOR_CARD)
     radius = ListProperty([dp(14)])
-    border_color = ListProperty(None)
-    border_width = ListProperty([dp(1.5)])
- 
+    border_color = ListProperty([0, 0, 0, 0])
+    border_width = NumericProperty(dp(1.5))
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         with self.canvas.before:
             self._color = Color(*self.bg_color)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
-            self._border_color = Color(0, 0, 0, 0)
-            self._border_line = Line(width=self.border_width[0] if self.border_width else dp(1.5))
-        self.bind(pos=self._update, size=self._update, bg_color=self._update_color,
-                  border_color=self._update_border_color)
-        if self.border_color:
-            self._update_border_color()
- 
+            self._bcolor = Color(*self.border_color)
+            self._bline = Line(width=self.border_width)
+        self.bind(
+            pos=self._update, size=self._update, radius=self._update,
+            bg_color=lambda i, v: setattr(self._color, "rgba", v),
+            border_color=lambda i, v: setattr(self._bcolor, "rgba", v),
+            border_width=lambda i, v: setattr(self._bline, "width", v),
+        )
+        self._update()
+
     def _update(self, *args):
         self._rect.pos = self.pos
         self._rect.size = self.size
         self._rect.radius = self.radius
-        r = self.radius[0] if self.radius else dp(14)
-        self._border_line.rounded_rectangle = (self.x, self.y, self.width, self.height, r)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.bg_color
- 
-    def _update_border_color(self, *args):
-        self._border_color.rgba = self.border_color if self.border_color else (0, 0, 0, 0)
- 
- 
+        self._bline.rounded_rectangle = (self.x, self.y, self.width, self.height, self.radius[0])
+
+
 class RoundedButton(ButtonBehavior, BoxLayout):
-    """Botón custom con fondo redondeado."""
+    """Boton con fondo redondeado."""
     text = StringProperty("")
     bg_color = ListProperty(COLOR_GOLD)
     text_color = ListProperty((0.043, 0.055, 0.098, 1))
     font_size = StringProperty("16sp")
     bold = BooleanProperty(True)
     radius = ListProperty([dp(14)])
- 
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         with self.canvas.before:
             self._color = Color(*self.bg_color)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
-        self.bind(pos=self._update, size=self._update, bg_color=self._update_color)
-        self._label = Label(
-            text=self.text, color=self.text_color, font_size=self.font_size,
-            bold=self.bold
-        )
+        self.bind(pos=self._update, size=self._update,
+                  bg_color=lambda i, v: setattr(self._color, "rgba", v))
+        self._label = Label(text=self.text, color=self.text_color,
+                            font_size=self.font_size, bold=self.bold)
         self.add_widget(self._label)
-        self.bind(text=lambda i, v: setattr(self._label, "text", v))
-        self.bind(text_color=lambda i, v: setattr(self._label, "color", v))
- 
+        self.bind(text=lambda i, v: setattr(self._label, "text", v),
+                  text_color=lambda i, v: setattr(self._label, "color", v))
+
     def _update(self, *args):
         self._rect.pos = self.pos
         self._rect.size = self.size
         self._rect.radius = self.radius
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.bg_color
- 
+
     def on_press(self):
         Animation.cancel_all(self)
         Animation(opacity=0.75, duration=0.08).start(self)
- 
+
     def on_release(self):
         Animation(opacity=1, duration=0.12).start(self)
- 
- 
-class ParkingSpotCell(ButtonBehavior, BoxLayout):
-    """Una celda de cajón dentro de la grilla del estacionamiento."""
-    spot_id = StringProperty("")
-    selected = BooleanProperty(False)
- 
-    def __init__(self, spot_id, on_select=None, **kwargs):
-        super().__init__(**kwargs)
-        self.spot_id = spot_id
-        self._on_select = on_select
-        with self.canvas.before:
-            self._color = Color(*COLOR_CARD_LIGHT)
-            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(6)])
-        self.bind(pos=self._update, size=self._update)
-        self.label = Label(text=spot_id, color=COLOR_TEXT, font_size="11sp")
-        self.add_widget(self.label)
- 
-    def _update(self, *args):
-        self._rect.pos = self.pos
-        self._rect.size = self.size
- 
-    def on_release(self):
-        if self._on_select:
-            self._on_select(self.spot_id)
- 
-    def set_selected(self, is_selected):
-        self.selected = is_selected
-        self._color.rgba = COLOR_GOLD if is_selected else COLOR_CARD_LIGHT
-        self.label.color = (0.043, 0.055, 0.098, 1) if is_selected else COLOR_TEXT
- 
- 
+
+
+class FilaChip(ButtonBehavior, RoundedBox):
+    """Boton de fila (A, B, C...). Se ilumina en dorado cuando esta activo."""
+
+    def __init__(self, letter, **kwargs):
+        super().__init__(radius=[dp(10)], bg_color=COLOR_BG, border_color=COLOR_BORDER,
+                         border_width=dp(1), **kwargs)
+        self.letter = letter
+        self.lbl = Label(text=letter, font_size="18sp", bold=True, color=COLOR_TEXT)
+        self.add_widget(self.lbl)
+
+    def set_active(self, on):
+        self.bg_color = COLOR_GOLD_DARK if on else COLOR_BG
+        self.border_color = COLOR_GOLD if on else COLOR_BORDER
+        self.border_width = dp(2) if on else dp(1)
+        self.lbl.color = COLOR_GOLD if on else COLOR_TEXT
+
+
 class BaseScreen(Screen):
-    """Screen con fondo sólido."""
+    """Screen con fondo solido."""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         with self.canvas.before:
             Color(*COLOR_BG)
             self._bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
- 
+
     def _update_bg(self, *args):
         self._bg.pos = self.pos
         self._bg.size = self.size
- 
- 
-def icon_badge(symbol, bg_color=COLOR_CARD_LIGHT, fg_color=COLOR_TEXT, size=dp(44), radius=None,
-               font_size="16sp", bold=True):
-    r = radius if radius is not None else [size / 2]
-    badge = RoundedBox(bg_color=bg_color, radius=r, size_hint=(None, None), size=(size, size))
-    badge.add_widget(Label(text=symbol, color=fg_color, font_size=font_size, bold=bold))
-    return badge
- 
- 
-class PhoneStatusIcons(Widget):
-    """Los 3 iconos típicos de la barra de estado de un celular (señal / wifi / batería)."""
+
+
+def mk_label(text, size="12sp", color=COLOR_TEXT, bold=False, halign="left", height=None, **kw):
+    lbl = Label(text=text, font_size=size, color=color, bold=bold,
+                halign=halign, valign="middle", **kw)
+    if height:
+        lbl.size_hint_y = None
+        lbl.height = height
+    lbl.bind(size=lambda i, v: setattr(i, "text_size", v))
+    return lbl
+
+
+# ----------------------------------------------------------------------
+# Iconos vectoriales
+# ----------------------------------------------------------------------
+class VectorIcon(Widget):
+    color_rgba = ListProperty(COLOR_GOLD)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         with self.canvas:
-            self._color = Color(*COLOR_TEXT)
-            self._signal_rects = [Rectangle() for _ in range(4)]
-            self._wifi_lines = [Line(width=dp(1.4)) for _ in range(3)]
-            self._battery_outline = Line(width=dp(1.3))
-            self._battery_fill = Rectangle()
-            self._battery_tip = Rectangle()
-        self.bind(pos=self._redraw, size=self._redraw)
- 
+            self._color = Color(*self.color_rgba)
+            self.setup()
+        self.bind(pos=self._redraw, size=self._redraw,
+                  color_rgba=lambda i, v: setattr(self._color, "rgba", v))
+        self._redraw()
+
+    def setup(self):
+        pass
+
+    def _redraw(self, *args):
+        pass
+
+
+class PhoneStatusIcons(VectorIcon):
+    color_rgba = ListProperty(COLOR_TEXT)
+
+    def setup(self):
+        self._signal = [Rectangle() for _ in range(4)]
+        self._wifi = [Line(width=dp(1.4)) for _ in range(3)]
+        self._bat = Line(width=dp(1.3))
+        self._bat_fill = Rectangle()
+        self._bat_tip = Rectangle()
+
     def _redraw(self, *args):
         x, y = self.pos
         h = self.height
- 
-        # --- Señal (4 barras crecientes) ---
-        bar_w = dp(3)
-        gap = dp(2)
-        base_h = dp(5)
-        step = dp(2.3)
         sx = x
-        for i, rect in enumerate(self._signal_rects):
-            bh = base_h + step * i
+        for i, rect in enumerate(self._signal):
             rect.pos = (sx, y + (h - dp(11)) / 2)
-            rect.size = (bar_w, bh)
-            sx += bar_w + gap
- 
-        # --- WiFi (3 arcos concéntricos) ---
-        wifi_cx = x + dp(34)
-        wifi_cy = y + h / 2 - dp(2)
-        radii = [dp(3), dp(6), dp(9)]
-        for line, r in zip(self._wifi_lines, radii):
-            line.circle = (wifi_cx, wifi_cy, r, 35, 145)
- 
-        # --- Batería (contorno + relleno + terminal) ---
-        bat_w, bat_h = dp(20), dp(10)
-        bx = x + dp(50)
-        by = y + (h - bat_h) / 2
-        radius = dp(2)
-        self._battery_outline.rounded_rectangle = (bx, by, bat_w, bat_h, radius)
-        pad = dp(2)
-        self._battery_fill.pos = (bx + pad, by + pad)
-        self._battery_fill.size = (bat_w - pad * 2 - dp(2), bat_h - pad * 2)
-        self._battery_tip.pos = (bx + bat_w, by + bat_h / 2 - dp(2))
-        self._battery_tip.size = (dp(2), dp(4))
- 
- 
-class CheckIcon(Widget):
-    """Palomita (check) vectorial para estados de éxito."""
+            rect.size = (dp(3), dp(5) + dp(2.3) * i)
+            sx += dp(5)
+        cx, cy = x + dp(34), y + h / 2 - dp(2)
+        for line, r in zip(self._wifi, [dp(3), dp(6), dp(9)]):
+            line.circle = (cx, cy, r, -55, 55)          # arco hacia arriba
+        bw, bh = dp(20), dp(10)
+        bx, by = x + dp(50), y + (h - bh) / 2
+        self._bat.rounded_rectangle = (bx, by, bw, bh, dp(2))
+        self._bat_fill.pos = (bx + dp(2), by + dp(2))
+        self._bat_fill.size = (bw - dp(6), bh - dp(4))
+        self._bat_tip.pos = (bx + bw, by + bh / 2 - dp(2))
+        self._bat_tip.size = (dp(2), dp(4))
+
+
+class CheckIcon(VectorIcon):
     color_rgba = ListProperty(COLOR_GREEN)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._line = Line(width=dp(1.8), cap="round", joint="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+
+    def setup(self):
+        self._line = Line(width=dp(1.8), cap="round", joint="round")
+
     def _redraw(self, *args):
         x, y, w, h = self.x, self.y, self.width, self.height
-        self._line.points = [
-            x + w * 0.12, y + h * 0.52,
-            x + w * 0.40, y + h * 0.18,
-            x + w * 0.90, y + h * 0.82,
-        ]
- 
- 
-class DotIcon(Widget):
-    """Punto/pin de ubicación vectorial (círculo relleno)."""
-    color_rgba = ListProperty(COLOR_GOLD)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._ellipse = Ellipse()
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+        self._line.points = [x + w * 0.12, y + h * 0.52, x + w * 0.40, y + h * 0.18,
+                             x + w * 0.90, y + h * 0.82]
+
+
+class DotIcon(VectorIcon):
+    def setup(self):
+        self._ellipse = Ellipse()
+
     def _redraw(self, *args):
         d = min(self.width, self.height) * 0.5
-        cx = self.center_x - d / 2
-        cy = self.center_y - d / 2
-        self._ellipse.pos = (cx, cy)
+        self._ellipse.pos = (self.center_x - d / 2, self.center_y - d / 2)
         self._ellipse.size = (d, d)
- 
- 
-class CarIcon(Widget):
-    """Icono vectorial de auto visto."""
-    color_rgba = ListProperty(COLOR_GOLD)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._body = Line(width=dp(1.6), joint="round", cap="round")
-            self._wheel1 = Line(width=dp(1.4))
-            self._wheel2 = Line(width=dp(1.4))
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+
+
+class CarIcon(VectorIcon):
+    def setup(self):
+        self._body = Line(width=dp(1.6), joint="round", cap="round")
+        self._w1 = Line(width=dp(1.4))
+        self._w2 = Line(width=dp(1.4))
+
     def _redraw(self, *args):
         x, y, w, h = self.x, self.y, self.width, self.height
-        # silueta simplificada tipo "auto" (carrocería + parabrisas)
         self._body.points = [
-            x + w * 0.05, y + h * 0.40,
-            x + w * 0.20, y + h * 0.62,
-            x + w * 0.35, y + h * 0.62,
-            x + w * 0.42, y + h * 0.78,
-            x + w * 0.62, y + h * 0.78,
-            x + w * 0.70, y + h * 0.62,
-            x + w * 0.85, y + h * 0.62,
-            x + w * 0.95, y + h * 0.40,
-            x + w * 0.90, y + h * 0.28,
-            x + w * 0.10, y + h * 0.28,
+            x + w * 0.05, y + h * 0.40, x + w * 0.20, y + h * 0.62,
+            x + w * 0.35, y + h * 0.62, x + w * 0.42, y + h * 0.78,
+            x + w * 0.62, y + h * 0.78, x + w * 0.70, y + h * 0.62,
+            x + w * 0.85, y + h * 0.62, x + w * 0.95, y + h * 0.40,
+            x + w * 0.90, y + h * 0.28, x + w * 0.10, y + h * 0.28,
             x + w * 0.05, y + h * 0.40,
         ]
         r = w * 0.09
-        self._wheel1.circle = (x + w * 0.28, y + h * 0.28, r)
-        self._wheel2.circle = (x + w * 0.72, y + h * 0.28, r)
- 
- 
-class PencilIcon(Widget):
-    """Icono vectorial de lápiz para el paso 'Guarda el número'."""
-    color_rgba = ListProperty(COLOR_GOLD)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._body = Line(width=dp(1.6), joint="round", cap="round", close=True)
-            self._tip_line = Line(width=dp(1.2))
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+        self._w1.circle = (x + w * 0.28, y + h * 0.28, r)
+        self._w2.circle = (x + w * 0.72, y + h * 0.28, r)
+
+
+class PencilIcon(VectorIcon):
+    def setup(self):
+        self._body = Line(width=dp(1.6), joint="round", cap="round", close=True)
+        self._tip = Line(width=dp(1.2))
+
     def _redraw(self, *args):
         x, y, w, h = self.x, self.y, self.width, self.height
-        self._body.points = [
-            x + w * 0.15, y + h * 0.15,
-            x + w * 0.30, y + h * 0.10,
-            x + w * 0.90, y + h * 0.70,
-            x + w * 0.80, y + h * 0.90,
-            x + w * 0.20, y + h * 0.30,
-        ]
-        self._tip_line.points = [
-            x + w * 0.15, y + h * 0.15,
-            x + w * 0.20, y + h * 0.30,
-        ]
- 
- 
-class PinIcon(Widget):
-    """Icono vectorial de pin de ubicación."""
-    color_rgba = ListProperty(COLOR_GOLD)
+        self._body.points = [x + w * 0.15, y + h * 0.15, x + w * 0.30, y + h * 0.10,
+                             x + w * 0.90, y + h * 0.70, x + w * 0.80, y + h * 0.90,
+                             x + w * 0.20, y + h * 0.30]
+        self._tip.points = [x + w * 0.15, y + h * 0.15, x + w * 0.20, y + h * 0.30]
+
+
+class PinIcon(VectorIcon):
     show_check = BooleanProperty(False)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._outline = Line(width=dp(1.6), joint="round", cap="round")
-            self._check = Line(width=dp(1.6), cap="round", joint="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color,
-                  show_check=self._redraw)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+
+    def setup(self):
+        self._outline = Line(width=dp(1.6), joint="round", cap="round")
+        self._check = Line(width=dp(1.6), cap="round", joint="round")
+        self.bind(show_check=self._redraw)
+
     def _redraw(self, *args):
         x, y, w, h = self.x, self.y, self.width, self.height
-        cx = x + w * 0.5
-        top_cy = y + h * 0.62
-        r = w * 0.30
-        import math
+        cx, top_cy, r = x + w * 0.5, y + h * 0.62, w * 0.30
         pts = []
-        # arco superior de la gota (de -40° a 220°, dejando la punta abajo)
         for deg in range(-40, 221, 10):
             rad = math.radians(deg)
-            pts.append(cx + r * math.cos(rad))
-            pts.append(top_cy + r * math.sin(rad))
-        # punta inferior
+            pts += [cx + r * math.cos(rad), top_cy + r * math.sin(rad)]
         pts += [cx, y + h * 0.06]
         self._outline.points = pts
-        if self.show_check:
-            self._check.points = [
-                cx - r * 0.5, top_cy,
-                cx - r * 0.1, top_cy - r * 0.4,
-                cx + r * 0.55, top_cy + r * 0.45,
-            ]
-        else:
-            self._check.points = []
- 
- 
-class NoEntryIcon(Widget):
-    """Icono de 'prohibido', usado en el aviso de 'Funciona 100% offline'."""
+        self._check.points = ([cx - r * 0.5, top_cy, cx - r * 0.1, top_cy - r * 0.4,
+                               cx + r * 0.55, top_cy + r * 0.45] if self.show_check else [])
+
+
+class NoEntryIcon(VectorIcon):
     color_rgba = ListProperty(COLOR_RED)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._circle = Line(width=dp(1.6))
-            self._slash = Line(width=dp(1.6), cap="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+
+    def setup(self):
+        self._circle = Line(width=dp(1.6))
+        self._slash = Line(width=dp(1.6), cap="round")
+
     def _redraw(self, *args):
         cx, cy = self.center_x, self.center_y
         r = min(self.width, self.height) * 0.42
         self._circle.circle = (cx, cy, r)
-        import math
-        ang = math.radians(45)
-        self._slash.points = [
-            cx - r * math.cos(ang), cy - r * math.sin(ang),
-            cx + r * math.cos(ang), cy + r * math.sin(ang),
-        ]
- 
- 
-class CompassIcon(Widget):
-    """Icono de brújula."""
-    color_rgba = ListProperty(COLOR_GOLD)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._circle = Line(width=dp(1.5))
-            self._needle = Line(width=dp(1.3), close=True, joint="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
+        a = math.radians(45)
+        self._slash.points = [cx - r * math.cos(a), cy - r * math.sin(a),
+                              cx + r * math.cos(a), cy + r * math.sin(a)]
+
+
+class CompassIcon(VectorIcon):
+    def setup(self):
+        self._circle = Line(width=dp(1.5))
+        self._needle = Line(width=dp(1.3), close=True, joint="round")
+
     def _redraw(self, *args):
         cx, cy = self.center_x, self.center_y
         r = min(self.width, self.height) * 0.42
         self._circle.circle = (cx, cy, r)
-        self._needle.points = [
-            cx, cy + r * 0.6,
-            cx + r * 0.28, cy,
-            cx, cy - r * 0.6,
-            cx - r * 0.28, cy,
-        ]
- 
- 
-class ChevronDownIcon(Widget):
-    """Pequeña flecha/chevron apuntando hacia abajo."""
-    color_rgba = ListProperty(COLOR_GOLD)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._line = Line(width=dp(1.6), cap="round", joint="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
-    def _redraw(self, *args):
-        x, y, w, h = self.x, self.y, self.width, self.height
-        self._line.points = [
-            x + w * 0.15, y + h * 0.62,
-            x + w * 0.5, y + h * 0.30,
-            x + w * 0.85, y + h * 0.62,
-        ]
- 
- 
-class CrosshairIcon(Widget):
-    """Icono circular con una 'X' en el centro (usado para Escalera/Elevador,
-    a modo de marcador de punto de interés en el mapa)."""
-    color_rgba = ListProperty(COLOR_TEXT)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._circle = Line(width=dp(1.3))
-            self._x1 = Line(width=dp(1.2), cap="round")
-            self._x2 = Line(width=dp(1.2), cap="round")
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
- 
-    def _redraw(self, *args):
-        cx, cy = self.center_x, self.center_y
-        r = min(self.width, self.height) * 0.46
-        self._circle.circle = (cx, cy, r)
-        k = r * 0.45
-        self._x1.points = [cx - k, cy - k, cx + k, cy + k]
-        self._x2.points = [cx - k, cy + k, cx + k, cy - k]
- 
- 
-class WarningTriangleIcon(Widget):
-    """Triángulo de alerta con signo de exclamación adentro."""
+        self._needle.points = [cx, cy + r * 0.6, cx + r * 0.28, cy,
+                               cx, cy - r * 0.6, cx - r * 0.28, cy]
+
+
+class WarningTriangleIcon(VectorIcon):
     color_rgba = ListProperty(COLOR_RED)
- 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas:
-            self._color = Color(*self.color_rgba)
-            self._triangle = Line(width=dp(1.8), joint="round", cap="round", close=True)
-            self._bar = Line(width=dp(2), cap="round")
-            self._dot = Ellipse()
-        self.bind(pos=self._redraw, size=self._redraw, color_rgba=self._update_color)
- 
-    def _update_color(self, *args):
-        self._color.rgba = self.color_rgba
-        self._dot.pos = self._dot.pos 
- 
+
+    def setup(self):
+        self._tri = Line(width=dp(1.8), joint="round", cap="round", close=True)
+        self._bar = Line(width=dp(2), cap="round")
+        self._dot = Ellipse()
+
     def _redraw(self, *args):
         x, y, w, h = self.x, self.y, self.width, self.height
-        self._triangle.points = [
-            x + w * 0.5, y + h * 0.90,
-            x + w * 0.06, y + h * 0.12,
-            x + w * 0.94, y + h * 0.12,
-        ]
+        self._tri.points = [x + w * 0.5, y + h * 0.90, x + w * 0.06, y + h * 0.12,
+                            x + w * 0.94, y + h * 0.12]
         self._bar.points = [x + w * 0.5, y + h * 0.60, x + w * 0.5, y + h * 0.38]
-        dot_d = w * 0.07
-        self._dot.pos = (x + w * 0.5 - dot_d / 2, y + h * 0.28 - dot_d / 2)
-        self._dot.size = (dot_d, dot_d)
- 
- 
+        d = w * 0.07
+        self._dot.pos = (x + w * 0.5 - d / 2, y + h * 0.28 - d / 2)
+        self._dot.size = (d, d)
+
+
 class GoldProgressBar(Widget):
-    """Barra de progreso vectorial en dorado."""
-    value = ListProperty([0])  # usamos lista para forzar refresco simple
-    max_value = 100
- 
-    def __init__(self, **kwargs):
-        self._val = kwargs.pop("value", 0)
-        self.max_value = kwargs.pop("max", 100)
+    def __init__(self, value=0, maximum=100, **kwargs):
         super().__init__(**kwargs)
+        self._val = value
+        self._maximum = maximum
         with self.canvas:
-            self._track_color = Color(*COLOR_CARD_LIGHT)
+            Color(*COLOR_CARD_LIGHT)
             self._track = RoundedRectangle(radius=[dp(3)])
-            self._fill_color = Color(*COLOR_GOLD)
+            Color(*COLOR_GOLD)
             self._fill = RoundedRectangle(radius=[dp(3)])
         self.bind(pos=self._redraw, size=self._redraw)
- 
-    def set_value(self, v):
-        self._val = max(0, min(self.max_value, v))
         self._redraw()
- 
+
+    def set_value(self, v):
+        self._val = max(0, min(self._maximum, v))
+        self._redraw()
+
     def _redraw(self, *args):
         self._track.pos = self.pos
         self._track.size = self.size
-        ratio = self._val / self.max_value if self.max_value else 0
-        fw = max(self.height, self.width * ratio)  # nunca menos que un círculo completo
-        fw = self.width * ratio
+        ratio = self._val / self._maximum
         self._fill.pos = self.pos
-        self._fill.size = (max(fw, dp(2) if ratio > 0 else 0), self.height)
- 
- 
+        self._fill.size = (max(self.width * ratio, dp(2) if ratio > 0 else 0), self.height)
+
+
+# ----------------------------------------------------------------------
+# MAPA DEL ESTACIONAMIENTO (plano girado, con cajon iluminado)
+# ----------------------------------------------------------------------
+class ParkingMap(StencilView):
+    """Dibuja el plano completo. Asigna selected = "C-08" para iluminar un cajon.
+    crop=True muestra solo la parte superior (usado como fondo atenuado)."""
+    selected = StringProperty("")
+    pulse = NumericProperty(0.0)
+    crop = BooleanProperty(False)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._static = InstructionGroup()
+        self._dyn = InstructionGroup()
+        self.canvas.add(self._static)
+        self.canvas.add(self._dyn)
+        self._tex_cache = {}
+        self._anim = None
+        self.bind(pos=self._draw_static, size=self._draw_static, crop=self._draw_static)
+        self.bind(pos=self._draw_dyn, size=self._draw_dyn, pulse=self._draw_dyn)
+        self.bind(selected=lambda *a: self.restart())
+
+    # ---------- geometria: plano horizontal -> pantalla (girado 90°) ----------
+    def _mappers(self):
+        pad = dp(8)
+        aw, ah = self.width - 2 * pad, self.height - 2 * pad
+        s = aw / PLAN_W if self.crop else min(aw / PLAN_W, ah / PLAN_H)
+        ox = self.x + pad + (aw - PLAN_W * s) / 2
+        top = self.top - pad - (0 if self.crop else (ah - PLAN_H * s) / 2)
+
+        def R(x, y, w, h):
+            return (ox + (SRC_H - y - h) * s, top - (x + w) * s, h * s, w * s)
+
+        def C(cx, cy):
+            return (ox + (SRC_H - cy) * s, top - cx * s)
+
+        return s, R, C
+
+    # ---------- texto ----------
+    def _tex(self, text, size, bold=True):
+        key = (text, round(size, 1), bold)
+        t = self._tex_cache.get(key)
+        if t is None:
+            lbl = CoreLabel(text=text, font_size=max(size, 1), bold=bold, halign="center")
+            lbl.refresh()
+            t = self._tex_cache[key] = lbl.texture
+        return t
+
+    def _text(self, g, text, cx, cy, size, color, bold=True):
+        t = self._tex(text, size, bold)
+        g.add(Color(*color))
+        g.add(Rectangle(texture=t, pos=(cx - t.width / 2, cy - t.height / 2), size=t.size))
+
+    # ---------- capa estatica ----------
+    def _draw_static(self, *args):
+        g = self._static
+        g.clear()
+        if self.width < 10 or self.height < 10:
+            return
+        s, R, C = self._mappers()
+        k = s / 0.8
+        r = dp(16)
+        g.add(Color(*COLOR_CANVAS))
+        g.add(RoundedRectangle(pos=self.pos, size=self.size, radius=[r]))
+        g.add(Color(*COLOR_CARD_LIGHT))
+        g.add(Line(rounded_rectangle=(self.x, self.y, self.width, self.height, r), width=1))
+
+        x, y, w, h = R(0, 0, 640, 400)                      # muro perimetral
+        g.add(Line(rounded_rectangle=(x, y, w, h, dp(10)), width=dp(1.5)))
+
+        for sid, (sx, sy, sw, sh) in SPOTS.items():         # cajones
+            x, y, w, h = R(sx, sy, sw, sh)
+            g.add(Color(*COLOR_CARD))
+            g.add(RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(4)]))
+            g.add(Color(*COLOR_CARD_LIGHT))
+            g.add(Line(rounded_rectangle=(x, y, w, h, dp(4)), width=1))
+            self._text(g, sid, x + w / 2, y + h / 2, 9 * k, COLOR_TEXT_MUTED)
+
+        x, y, w, h = R(190, 166, 72, 64)                    # nucleo escaleras/elevadores
+        g.add(Color(*COLOR_CARD))
+        g.add(RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(6)]))
+        g.add(Color(*COLOR_CARD_LIGHT))
+        g.add(Line(rounded_rectangle=(x, y, w, h, dp(6)), width=1))
+        self._text(g, "Esc./Elev.", x + w / 2, y + h / 2, 8 * k, COLOR_TEXT)
+
+        x, y, w, h = R(130, 250, 192, 62)                   # rampa de acceso vehicular
+        cx, cy = x + w / 2, y + h / 2
+        g.add(Color(*COLOR_CARD))
+        g.add(RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(8)]))
+        g.add(Color(*COLOR_CARD_LIGHT))
+        g.add(Line(rounded_rectangle=(x, y, w, h, dp(8)), width=1))
+        self._text(g, "Rampa de\nacceso\nvehicular", cx, cy + 14 * s, 9 * k, COLOR_TEXT_MUTED)
+        a = 5 * s
+        g.add(Color(*COLOR_GOLD))
+        g.add(Line(points=[cx, cy - 22 * s, cx, cy - 52 * s], width=dp(1.6), cap="round"))
+        g.add(Line(points=[cx - a, cy - 44 * s, cx, cy - 52 * s, cx + a, cy - 44 * s],
+                   width=dp(1.6), cap="round", joint="round"))
+
+        for name, rx, ry, gold in REFS:                     # referencias
+            cx, cy = C(rx, ry)
+            t = self._tex(name, 8 * k)
+            cw, ch = t.width + dp(12), t.height + dp(8)
+            g.add(Color(*COLOR_CARD))
+            g.add(RoundedRectangle(pos=(cx - cw / 2, cy - ch / 2), size=(cw, ch), radius=[dp(6)]))
+            g.add(Color(*COLOR_CARD_LIGHT))
+            g.add(Line(rounded_rectangle=(cx - cw / 2, cy - ch / 2, cw, ch, dp(6)), width=1))
+            self._text(g, name, cx, cy, 8 * k, COLOR_GOLD if gold else COLOR_TEXT)
+
+    # ---------- capa dinamica: cajon iluminado ----------
+    def _draw_dyn(self, *args):
+        g = self._dyn
+        g.clear()
+        sp = SPOTS.get(self.selected)
+        if not sp or self.width < 10 or self.height < 10:
+            return
+        s, R, C = self._mappers()
+        k = s / 0.8
+        x, y, w, h = R(*sp)
+        p = self.pulse
+        gl = dp(2) + dp(5) * p
+        g.add(Color(*COLOR_GOLD[:3], 0.10 + 0.22 * p))       # resplandor pulsante
+        g.add(RoundedRectangle(pos=(x - gl, y - gl), size=(w + 2 * gl, h + 2 * gl),
+                               radius=[dp(4) + gl]))
+        g.add(Color(*COLOR_CARD))                            # tapa la etiqueta gris
+        g.add(RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(4)]))
+        g.add(Color(*COLOR_GOLD[:3], 0.20))
+        g.add(RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(4)]))
+        g.add(Color(*COLOR_GOLD))
+        g.add(Line(rounded_rectangle=(x, y, w, h, dp(4)), width=dp(2)))
+        self._text(g, self.selected, x + w / 2, y + h / 2 + dp(3), 9 * k, COLOR_GOLD)
+        d = dp(4) + dp(2) * p
+        g.add(Color(*COLOR_GOLD))
+        g.add(Ellipse(pos=(x + w / 2 - d / 2, y + dp(4)), size=(d, d)))
+
+    # ---------- animacion de pulso ----------
+    def halt(self):
+        if self._anim:
+            self._anim.cancel(self)
+            self._anim = None
+
+    def restart(self):
+        self.halt()
+        self.pulse = 0.0
+        self._draw_dyn()
+        if self.selected in SPOTS:
+            a = (Animation(pulse=1.0, d=0.9, t="in_out_sine")
+                 + Animation(pulse=0.0, d=0.9, t="in_out_sine"))
+            a.repeat = True
+            a.start(self)
+            self._anim = a
+
+
+# ----------------------------------------------------------------------
+# Piezas de layout compartidas
+# ----------------------------------------------------------------------
 def status_bar():
-    """Barra de estado simulada."""
     bar = BoxLayout(size_hint=(1, None), height=dp(28), padding=(dp(16), 0))
     bar.add_widget(Label(text="9:41", color=COLOR_TEXT, font_size="13sp", bold=True,
-                          size_hint=(None, 1), width=dp(60), halign="left"))
+                         size_hint=(None, 1), width=dp(60), halign="left"))
     bar.add_widget(Label(text=""))
     bar.add_widget(PhoneStatusIcons(size_hint=(None, 1), width=dp(74)))
     return bar
- 
- 
+
+
 def screen_title(text, subtitle=None):
-    box = BoxLayout(orientation="vertical", size_hint=(1, None), height=dp(60) if subtitle else dp(36),
-                     padding=(dp(20), 0))
-    box.add_widget(Label(text=text, color=COLOR_TEXT, font_size="22sp", bold=True,
-                          halign="left", size_hint=(1, None), height=dp(30)))
+    box = BoxLayout(orientation="vertical", size_hint=(1, None),
+                    height=dp(60) if subtitle else dp(36), padding=(dp(20), 0))
+    box.add_widget(mk_label(text, "22sp", COLOR_TEXT, True, height=dp(30)))
     if subtitle:
-        lbl = Label(text=subtitle, color=COLOR_TEXT_MUTED, font_size="13sp",
-                     halign="left", size_hint=(1, None), height=dp(20))
-        lbl.bind(size=lambda i, v: setattr(i, "text_size", v))
-        box.add_widget(lbl)
+        box.add_widget(mk_label(subtitle, "13sp", COLOR_TEXT_MUTED, height=dp(20)))
     return box
- 
- 
+
+
+def nav_header(title, sub):
+    """Encabezado 'Nivel -1' + subtitulo (texto o widget) + boton brujula."""
+    box = BoxLayout(size_hint=(1, None), height=dp(52))
+    left = BoxLayout(orientation="vertical")
+    left.add_widget(mk_label(title, "20sp", COLOR_TEXT, True, height=dp(28)))
+    if isinstance(sub, str):
+        sub = mk_label(sub, "11sp", COLOR_TEXT_MUTED, height=dp(18))
+    left.add_widget(sub)
+    box.add_widget(left)
+    wrap = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, 1), width=dp(44))
+    bg = RoundedBox(bg_color=COLOR_CARD, border_color=COLOR_BORDER, border_width=dp(1),
+                    radius=[dp(20)], size_hint=(None, None), size=(dp(40), dp(40)))
+    inner = AnchorLayout(anchor_x="center", anchor_y="center")
+    inner.add_widget(CompassIcon(size_hint=(None, None), size=(dp(20), dp(20))))
+    bg.add_widget(inner)
+    wrap.add_widget(bg)
+    box.add_widget(wrap)
+    return box
+
+
+def bottom_dock(height, spacing=dp(6)):
+    return RoundedBox(orientation="vertical", bg_color=COLOR_CARD, border_color=COLOR_BORDER,
+                      border_width=dp(1), radius=[dp(18), dp(18), 0, 0],
+                      padding=dp(20), spacing=spacing, size_hint=(1, None), height=height)
+
+
 # ----------------------------------------------------------------------
 # 1. SPLASH / BIENVENIDA
 # ----------------------------------------------------------------------
@@ -557,68 +612,59 @@ class SplashScreen(BaseScreen):
         super().__init__(**kwargs)
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
- 
+
         body = BoxLayout(orientation="vertical", padding=(dp(30), dp(20)), spacing=dp(16))
-        body.add_widget(BoxLayout(size_hint=(1, 0.35)))  # spacer
- 
-        # Icono: cuadrado redondeado con borde dorado y la "P" en el centro
+        body.add_widget(BoxLayout(size_hint=(1, 0.35)))
+
         icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(80))
-        icon = RoundedBox(bg_color=(0, 0, 0, 0), border_color=COLOR_GOLD, border_width=[dp(2)],
-                           radius=[dp(18)], size_hint=(None, None), size=(dp(64), dp(64)))
+        icon = RoundedBox(bg_color=(0, 0, 0, 0), border_color=COLOR_GOLD, border_width=dp(2),
+                          radius=[dp(18)], size_hint=(None, None), size=(dp(64), dp(64)))
         icon.add_widget(Label(text="P", color=COLOR_GOLD, font_size="26sp", bold=True))
         icon_wrap.add_widget(icon)
         body.add_widget(icon_wrap)
- 
-        title = Label(text="AlzParking", color=COLOR_TEXT, font_size="26sp", bold=True,
-                      size_hint=(1, None), height=dp(46))
-        body.add_widget(title)
- 
+
+        body.add_widget(Label(text="AlzParking", color=COLOR_TEXT, font_size="26sp", bold=True,
+                              size_hint=(1, None), height=dp(46)))
+
         badge_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(24))
-        badge_inner = RoundedBox(bg_color=COLOR_CARD, radius=[dp(12)], spacing=dp(6),
-                                  padding=(dp(10), 0),
-                                  size_hint=(None, None), size=(dp(156), dp(22)))
+        badge = RoundedBox(bg_color=COLOR_CARD, radius=[dp(12)], spacing=dp(6), padding=(dp(10), 0),
+                           size_hint=(None, None), size=(dp(156), dp(22)))
         dot_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=dp(8))
-        dot_wrap.add_widget(DotIcon(size_hint=(None, None), size=(dp(7), dp(7)), color_rgba=COLOR_GOLD))
-        badge_inner.add_widget(dot_wrap)
-        badge_inner.add_widget(Label(text="100% LOCAL & OFFLINE", color=COLOR_TEXT_MUTED,
-                                      font_size="9sp", bold=True))
-        badge_wrap.add_widget(badge_inner)
+        dot_wrap.add_widget(DotIcon(size_hint=(None, None), size=(dp(14), dp(14))))
+        badge.add_widget(dot_wrap)
+        badge.add_widget(Label(text="100% LOCAL & OFFLINE", color=COLOR_TEXT_MUTED,
+                               font_size="9sp", bold=True))
+        badge_wrap.add_widget(badge)
         body.add_widget(badge_wrap)
- 
+
         body.add_widget(BoxLayout(size_hint=(1, 0.05)))
- 
-        subtitle = Label(text="Encuentra tu auto fácilmente", color=COLOR_TEXT, font_size="16sp",
-                          bold=True, size_hint=(1, None), height=dp(26))
-        body.add_widget(subtitle)
- 
-        desc = Label(
-            text="Guarda el número de tu cajón al estacionar.\n"
-                 "Nosotros iluminamos en el mapa. Sin cuentas, sin señal ni ruido.",
-            color=COLOR_TEXT_MUTED, font_size="12sp", halign="center", valign="top",
-            size_hint=(1, None), height=dp(50)
-        )
+        body.add_widget(Label(text="Encuentra tu auto fácilmente", color=COLOR_TEXT, font_size="16sp",
+                              bold=True, size_hint=(1, None), height=dp(26)))
+        desc = Label(text="Guarda el número de tu cajón al estacionar.\n"
+                          "Nosotros iluminamos en el mapa. Sin cuentas, sin señal ni ruido.",
+                     color=COLOR_TEXT_MUTED, font_size="12sp", halign="center", valign="top",
+                     size_hint=(1, None), height=dp(50))
         desc.bind(size=lambda i, v: setattr(i, "text_size", v))
         body.add_widget(desc)
- 
-        body.add_widget(BoxLayout(size_hint=(1, 1)))  # spacer flexible
- 
+        body.add_widget(BoxLayout(size_hint=(1, 1)))
+
         btn = RoundedButton(text=">  Comenzar", size_hint=(1, None), height=dp(50))
         btn.bind(on_release=lambda i: self.goto_help())
         body.add_widget(btn)
- 
+
         dots = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(20))
-        dot = RoundedBox(bg_color=COLOR_TEXT_MUTED, radius=[dp(2)], size_hint=(None, None), size=(dp(80), dp(4)))
-        dots.add_widget(dot)
+        dots.add_widget(RoundedBox(bg_color=COLOR_TEXT_MUTED, radius=[dp(2)],
+                                   size_hint=(None, None), size=(dp(80), dp(4))))
         body.add_widget(dots)
- 
+
         root.add_widget(body)
         self.add_widget(root)
- 
+
     def goto_help(self):
         self.manager.transition = SlideTransition(direction="left")
         self.manager.current = "help"
- 
- 
+
+
 # ----------------------------------------------------------------------
 # 2. PANTALLA DE AYUDA
 # ----------------------------------------------------------------------
@@ -627,64 +673,59 @@ class HelpScreen(BaseScreen):
         super().__init__(**kwargs)
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
- 
+
         body = BoxLayout(orientation="vertical", padding=(dp(24), dp(16)), spacing=dp(14))
         body.add_widget(screen_title("¿Cómo funciona?", "Guía rápida de 3 pasos sencillos"))
- 
+
         steps = [
             (CarIcon, "1. Estaciona tu auto", "Estaciónate libremente en el nivel -1 del subterráneo."),
-            (PencilIcon, "2. Guarda el número", "Ingresa el número de cajón en el que te dejaste tu columna."),
-            (PinIcon, "3. Encuéntralo en el mapa", "La app iluminará tu cajón para que sepas exactamente dónde volver."),
+            (PencilIcon, "2. Guarda tu cajón",
+             "Elige la fila e ingresa el número impreso en el piso o columna (ej. C-08)."),
+            (PinIcon, "3. Encuéntralo en el mapa",
+             "La app iluminará tu cajón para que sepas exactamente dónde volver."),
         ]
         for IconCls, title, desc in steps:
-            card = RoundedBox(bg_color=COLOR_CARD, radius=[dp(14)], size_hint=(1, None), height=dp(78),
-                               padding=dp(14), spacing=dp(12))
-            icon_box = RoundedBox(bg_color=COLOR_CARD_LIGHT, radius=[dp(10)], size_hint=(None, 1), width=dp(44))
-            icon_inner_wrap = AnchorLayout(anchor_x="center", anchor_y="center")
-            icon_inner_wrap.add_widget(IconCls(size_hint=(None, None), size=(dp(22), dp(22)),
-                                                color_rgba=COLOR_GOLD))
-            icon_box.add_widget(icon_inner_wrap)
+            card = RoundedBox(bg_color=COLOR_CARD, radius=[dp(14)], size_hint=(1, None),
+                              height=dp(78), padding=dp(14), spacing=dp(12))
+            icon_box = RoundedBox(bg_color=COLOR_CARD_LIGHT, radius=[dp(10)],
+                                  size_hint=(None, 1), width=dp(44))
+            wrap = AnchorLayout(anchor_x="center", anchor_y="center")
+            wrap.add_widget(IconCls(size_hint=(None, None), size=(dp(22), dp(22))))
+            icon_box.add_widget(wrap)
             card.add_widget(icon_box)
- 
+
             text_box = BoxLayout(orientation="vertical")
-            t = Label(text=title, color=COLOR_TEXT, font_size="14sp", bold=True,
-                      halign="left", size_hint=(1, None), height=dp(22))
-            t.bind(size=lambda i, v: setattr(i, "text_size", v))
-            d = Label(text=desc, color=COLOR_TEXT_MUTED, font_size="11sp",
-                      halign="left", valign="top", size_hint=(1, 1))
-            d.bind(size=lambda i, v: setattr(i, "text_size", v))
-            text_box.add_widget(t)
+            text_box.add_widget(mk_label(title, "14sp", COLOR_TEXT, True, height=dp(22)))
+            d = mk_label(desc, "11sp", COLOR_TEXT_MUTED)
+            d.valign = "top"
             text_box.add_widget(d)
             card.add_widget(text_box)
             body.add_widget(card)
- 
-        note = RoundedBox(bg_color=COLOR_CARD, radius=[dp(14)], size_hint=(1, None), height=dp(60),
-                           padding=dp(14), spacing=dp(10))
-        note_icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=dp(26))
-        note_icon_wrap.add_widget(NoEntryIcon(size_hint=(None, None), size=(dp(22), dp(22)), color_rgba=COLOR_RED))
-        note.add_widget(note_icon_wrap)
-        note_lbl = Label(text="[b]Funciona 100% offline.[/b] No requieres cuenta ni cobertura; "
-                               "el sistema queda guardado en tu celular.",
-                          markup=True,
-                          color=COLOR_TEXT_MUTED, font_size="10sp", halign="left", valign="middle")
-        note_lbl.bind(size=lambda i, v: setattr(i, "text_size", v))
+
+        note = RoundedBox(bg_color=COLOR_CARD, radius=[dp(14)], size_hint=(1, None),
+                          height=dp(60), padding=dp(14), spacing=dp(10))
+        wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=dp(26))
+        wrap.add_widget(NoEntryIcon(size_hint=(None, None), size=(dp(22), dp(22))))
+        note.add_widget(wrap)
+        note_lbl = mk_label("[b]Funciona 100% offline.[/b] No requieres cuenta ni cobertura; "
+                            "el sistema queda guardado en tu celular.", "10sp", COLOR_TEXT_MUTED)
+        note_lbl.markup = True
         note.add_widget(note_lbl)
         body.add_widget(note)
- 
+
         body.add_widget(BoxLayout(size_hint=(1, 1)))
- 
         btn = RoundedButton(text="Entendido", size_hint=(1, None), height=dp(50))
         btn.bind(on_release=lambda i: self.goto_download())
         body.add_widget(btn)
- 
+
         root.add_widget(body)
         self.add_widget(root)
- 
+
     def goto_download(self):
         self.manager.transition = SlideTransition(direction="left")
         self.manager.current = "download"
- 
- 
+
+
 # ----------------------------------------------------------------------
 # 3. DESCARGA DE MAPA
 # ----------------------------------------------------------------------
@@ -693,54 +734,54 @@ class MapDownloadScreen(BaseScreen):
         super().__init__(**kwargs)
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
- 
+
         body = BoxLayout(orientation="vertical", padding=(dp(24), dp(20)), spacing=dp(18))
         body.add_widget(BoxLayout(size_hint=(1, 0.3)))
- 
+
         badge_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(70))
         badge = RoundedBox(bg_color=COLOR_CARD, radius=[dp(35)], size_hint=(None, None), size=(dp(70), dp(70)))
-        badge_icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center")
-        self.download_pin = PinIcon(size_hint=(None, None), size=(dp(30), dp(30)), color_rgba=COLOR_GOLD)
-        badge_icon_wrap.add_widget(self.download_pin)
-        badge.add_widget(badge_icon_wrap)
+        inner = AnchorLayout(anchor_x="center", anchor_y="center")
+        self.download_pin = PinIcon(size_hint=(None, None), size=(dp(30), dp(30)))
+        inner.add_widget(self.download_pin)
+        badge.add_widget(inner)
         badge_wrap.add_widget(badge)
         body.add_widget(badge_wrap)
- 
+
         status_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(26))
         self.status_pill = RoundedBox(bg_color=(0, 0, 0, 0), radius=[dp(13)], spacing=dp(6),
-                                       padding=(dp(12), 0), size_hint=(None, None), size=(dp(220), dp(22)))
-        self.status_icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=0)
+                                      padding=(dp(12), 0), size_hint=(None, None), size=(dp(220), dp(22)))
+        self.status_icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center",
+                                             size_hint=(None, 1), width=0)
         self.status_pill.add_widget(self.status_icon_wrap)
         self.status_lbl = Label(text="Descargando...", color=COLOR_TEXT_MUTED, font_size="11sp", bold=True)
         self.status_pill.add_widget(self.status_lbl)
         status_wrap.add_widget(self.status_pill)
         body.add_widget(status_wrap)
- 
+
         self.title_lbl = Label(text="Descargando mapa del Nivel -1...", color=COLOR_TEXT,
-                                font_size="16sp", bold=True, size_hint=(1, None), height=dp(24))
+                               font_size="16sp", bold=True, size_hint=(1, None), height=dp(24))
         body.add_widget(self.title_lbl)
- 
-        self.progress = GoldProgressBar(max=100, value=15, size_hint=(1, None), height=dp(6))
+
+        self.progress = GoldProgressBar(value=15, size_hint=(1, None), height=dp(6))
         body.add_widget(self.progress)
- 
+
         desc = Label(text="Necesitarás conexión a internet solo esta vez. El resto de la app "
-                           "funcionará totalmente sin señal.",
+                          "funcionará totalmente sin señal.",
                      color=COLOR_TEXT_MUTED, font_size="11sp", halign="center", valign="top",
                      size_hint=(1, None), height=dp(40))
         desc.bind(size=lambda i, v: setattr(i, "text_size", v))
         body.add_widget(desc)
- 
         body.add_widget(BoxLayout(size_hint=(1, 1)))
- 
+
         self.btn = RoundedButton(text="Continuar al Mapa", size_hint=(1, None), height=dp(50),
-                                  bg_color=COLOR_CARD_LIGHT, text_color=COLOR_TEXT_MUTED)
+                                 bg_color=COLOR_CARD_LIGHT, text_color=COLOR_TEXT_MUTED)
         self.btn.disabled = True
-        self.btn.bind(on_release=lambda i: self.goto_map() if not self.btn.disabled else None)
+        self.btn.bind(on_release=lambda i: self.goto_map())
         body.add_widget(self.btn)
- 
+
         root.add_widget(body)
         self.add_widget(root)
- 
+
     def on_enter(self):
         self.progress.set_value(15)
         self.btn.disabled = True
@@ -748,18 +789,19 @@ class MapDownloadScreen(BaseScreen):
         self.btn.text_color = COLOR_TEXT_MUTED
         self.status_lbl.text = "Descargando..."
         self.status_lbl.color = COLOR_TEXT_MUTED
-        self.status_pill.bg_color = (0, 0, 0, 0)
-        self.status_pill.border_color = None
+        self.status_pill.border_color = [0, 0, 0, 0]
         self.status_icon_wrap.clear_widgets()
         self.status_icon_wrap.width = 0
-        self.download_pin.color_rgba = COLOR_GOLD
         self.download_pin.show_check = False
+        Clock.unschedule(self._tick)
         Clock.schedule_interval(self._tick, 0.15)
- 
+
+    def on_leave(self):
+        Clock.unschedule(self._tick)
+
     def _tick(self, dt):
         self.progress.set_value(self.progress._val + 12)
         if self.progress._val >= 100:
-            self.progress.set_value(100)
             self.status_lbl.text = "Descarga Completada"
             self.status_lbl.color = COLOR_GOLD
             self.status_pill.border_color = COLOR_GOLD
@@ -767,387 +809,300 @@ class MapDownloadScreen(BaseScreen):
             self.status_icon_wrap.add_widget(
                 CheckIcon(size_hint=(None, None), size=(dp(12), dp(12)), color_rgba=COLOR_GOLD))
             self.download_pin.show_check = True
-            self.title_lbl.text = "Descargando mapa del Nivel -1..."
             self.btn.disabled = False
             self.btn.bg_color = COLOR_GOLD
             self.btn.text_color = (0.043, 0.055, 0.098, 1)
             return False
- 
+
     def goto_map(self):
         self.manager.transition = SlideTransition(direction="left")
         self.manager.current = "empty_map"
- 
- 
+
+
 # ----------------------------------------------------------------------
-# Grilla de cajones compartida entre EmptyMap y SavedSpot
-# ----------------------------------------------------------------------
-def build_spot_grid(spots_row_a, spots_row_b, on_select=None, highlighted=None):
-    wrap = BoxLayout(orientation="vertical", spacing=dp(6), size_hint=(1, None), height=dp(150))
-    cells = {}
-    for row_name, spots in (("FILA A", spots_row_a), ("FILA B", spots_row_b)):
-        row_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint=(1, None), height=dp(68))
-        row_wrap.add_widget(Label(text=row_name, color=COLOR_TEXT_MUTED, font_size="10sp",
-                                   bold=True, size_hint=(1, None), height=dp(14), halign="left"))
-        grid = GridLayout(cols=len(spots), spacing=dp(4), size_hint=(1, None), height=dp(48))
-        for s in spots:
-            cell = ParkingSpotCell(s, on_select=on_select)
-            if highlighted and s == highlighted:
-                cell.set_selected(True)
-            cells[s] = cell
-            grid.add_widget(cell)
-        row_wrap.add_widget(grid)
-        wrap.add_widget(row_wrap)
-    wrap.cells = cells
-    return wrap
- 
- 
-def facilities_row():
-    row = BoxLayout(size_hint=(1, None), height=dp(34), spacing=dp(8))
-    for label in ("Escalera B", "Elevador 2", "Escalera A"):
-        chip = RoundedBox(bg_color=COLOR_CARD, radius=[dp(16)], padding=(dp(10), dp(4)), spacing=dp(6))
-        icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=dp(18))
-        icon_wrap.add_widget(CrosshairIcon(size_hint=(None, None), size=(dp(16), dp(16)), color_rgba=COLOR_TEXT))
-        chip.add_widget(icon_wrap)
-        chip.add_widget(Label(text=label, color=COLOR_TEXT_MUTED, font_size="10sp"))
-        row.add_widget(chip)
-    return row
- 
- 
-# ----------------------------------------------------------------------
-# 4. MAPA - ESTADO VACÍO
+# 4. MAPA - ESTADO VACIO
 # ----------------------------------------------------------------------
 class EmptyMapScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
- 
-        body = BoxLayout(orientation="vertical", padding=(dp(20), dp(10)), spacing=dp(12))
- 
-        header = BoxLayout(size_hint=(1, None), height=dp(30))
-        title_lbl = Label(text="Nivel -1", color=COLOR_TEXT, font_size="20sp", bold=True,
-                           halign="left", valign="middle", size_hint=(0.8, 1))
-        title_lbl.bind(size=lambda i, v: setattr(i, "text_size", v))
-        header.add_widget(title_lbl)
-        compass_wrap = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(0.2, 1))
-        compass_bg = RoundedBox(bg_color=COLOR_CARD, radius=[dp(15)], size_hint=(None, None),
-                                 size=(dp(30), dp(30)))
-        compass_inner = AnchorLayout(anchor_x="center", anchor_y="center")
-        compass_inner.add_widget(CompassIcon(size_hint=(None, None), size=(dp(18), dp(18)), color_rgba=COLOR_GOLD))
-        compass_bg.add_widget(compass_inner)
-        compass_wrap.add_widget(compass_bg)
-        header.add_widget(compass_wrap)
-        body.add_widget(header)
-        subtitle_lbl = Label(text="Estacionamiento Subterráneo", color=COLOR_TEXT_MUTED,
-                              font_size="11sp", halign="left", valign="middle",
-                              size_hint=(1, None), height=dp(16))
-        subtitle_lbl.bind(size=lambda i, v: setattr(i, "text_size", v))
-        body.add_widget(subtitle_lbl)
- 
-        dropdown = RoundedBox(bg_color=COLOR_CARD, radius=[dp(10)], size_hint=(1, None), height=dp(36),
-                               padding=(dp(12), 0))
-        dropdown.add_widget(Label(text="RAMPA DE ACCESO VEHICULAR", color=COLOR_TEXT,
-                                   font_size="11sp", bold=True, halign="left"))
-        chevron_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(None, 1), width=dp(20))
-        chevron_wrap.add_widget(ChevronDownIcon(size_hint=(None, None), size=(dp(12), dp(12)), color_rgba=COLOR_GOLD))
-        dropdown.add_widget(chevron_wrap)
-        body.add_widget(dropdown)
- 
-        self.grid = build_spot_grid(
-            ["A40", "A41", "A42", "A43", "A44"],
-            ["B45", "B46", "B47", "B48", "B49"],
-        )
-        body.add_widget(self.grid)
- 
-        body.add_widget(facilities_row())
-        body.add_widget(BoxLayout(size_hint=(1, 1)))
- 
-        prompt = Label(text="\u00BFD\u00F3nde te estacionaste?", color=COLOR_TEXT, font_size="15sp",
-                        bold=True, size_hint=(1, None), height=dp(22))
-        body.add_widget(prompt)
-        sub = Label(text="Guarda tu cajón para no perder tu auto", color=COLOR_TEXT_MUTED,
-                     font_size="11sp", size_hint=(1, None), height=dp(16))
-        body.add_widget(sub)
- 
+
+        mid = BoxLayout(orientation="vertical", padding=(dp(16), dp(4), dp(16), dp(8)), spacing=dp(8))
+        mid.add_widget(nav_header("Nivel -1", "Estacionamiento Subterráneo"))
+        self.map = ParkingMap(size_hint=(1, 1))
+        mid.add_widget(self.map)
+        root.add_widget(mid)
+
+        dock = bottom_dock(dp(150))
+        dock.add_widget(mk_label("¿Dónde te estacionaste?", "15sp", COLOR_TEXT, True, height=dp(22)))
+        dock.add_widget(mk_label("Guarda tu cajón para no perder el auto", "11sp",
+                                 COLOR_TEXT_MUTED, height=dp(16)))
         btn = RoundedButton(text="+  Guardar mi cajón", size_hint=(1, None), height=dp(50))
         btn.bind(on_release=lambda i: self.goto_selection())
-        body.add_widget(btn)
- 
-        root.add_widget(body)
+        dock.add_widget(btn)
+        root.add_widget(dock)
         self.add_widget(root)
- 
+
+    def on_pre_enter(self):
+        self.map.selected = ""
+
     def goto_selection(self):
         self.manager.transition = SlideTransition(direction="up")
         self.manager.current = "selection"
- 
- 
+
+
 # ----------------------------------------------------------------------
-# 5. SELECCIÓN DE CAJÓN (teclado numérico)
+# 5. SELECCION DE CAJON (fila A-F + teclado numerico)
 # ----------------------------------------------------------------------
 class SpotSelectionScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.fila = "A"
         self.entered = ""
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
- 
-        body = BoxLayout(orientation="vertical", padding=(dp(20), dp(10)), spacing=dp(14))
- 
-        header = BoxLayout(size_hint=(1, None), height=dp(30))
-        header_title = Label(text="Nivel -1", color=COLOR_TEXT, font_size="20sp", bold=True,
-                              halign="left", valign="middle", size_hint=(1, 1))
-        header_title.bind(size=lambda i, v: setattr(i, "text_size", v))
-        header.add_widget(header_title)
-        body.add_widget(header)
- 
-        # Mini mapa de fondo (deshabilitado visualmente)
-        self.mini_grid = build_spot_grid(
-            ["A40", "A41", "A42", "A43", "A44"],
-            ["B45", "B46", "B47", "B48", "B49"],
-        )
-        body.add_widget(self.mini_grid)
- 
-        panel = RoundedBox(orientation="vertical", bg_color=COLOR_CARD, radius=[dp(18), dp(18), 0, 0],
-                            padding=dp(20), spacing=dp(14), size_hint=(1, 1))
-        panel.add_widget(Label(text="INGRESA TU CAJÓN", color=COLOR_TEXT_MUTED, font_size="11sp",
-                                bold=True, size_hint=(1, None), height=dp(18)))
- 
-        self.display_lbl = Label(text="___", color=COLOR_GOLD, font_size="34sp", bold=True,
-                                  size_hint=(1, None), height=dp(50))
+
+        body = BoxLayout(orientation="vertical", padding=(dp(16), dp(6), dp(16), dp(10)), spacing=dp(10))
+        body.add_widget(mk_label("Nivel -1", "20sp", COLOR_TEXT, True, height=dp(30)))
+
+        # Mapa de fondo atenuado (solo la parte superior del plano)
+        self.bg_map = ParkingMap(crop=True, opacity=0.3, size_hint=(1, None), height=dp(90))
+        body.add_widget(self.bg_map)
+
+        panel = RoundedBox(orientation="vertical", bg_color=COLOR_CARD, border_color=COLOR_BORDER,
+                           border_width=dp(1), radius=[dp(18)], padding=dp(16), spacing=dp(10),
+                           size_hint=(1, 1))
+        panel.add_widget(Label(text="INGRESA TU FILA Y CAJÓN", color=COLOR_TEXT_MUTED, font_size="11sp",
+                               bold=True, size_hint=(1, None), height=dp(16)))
+
+        self.display_lbl = Label(text="A-__", color=COLOR_GOLD, font_size="34sp", bold=True,
+                                 size_hint=(1, None), height=dp(52))
         panel.add_widget(self.display_lbl)
- 
-        hint = Label(text="Verifica el número pintado en el piso o cuéntalo junto a tu columna.",
-                     color=COLOR_TEXT_MUTED, font_size="10sp", halign="center",
-                     size_hint=(1, None), height=dp(26))
-        hint.bind(size=lambda i, v: setattr(i, "text_size", v))
-        panel.add_widget(hint)
- 
+
+        self.hint = mk_label("", "10sp", COLOR_TEXT_MUTED, halign="center", height=dp(30))
+        panel.add_widget(self.hint)
+
+        # Selector de fila
+        chips_row = BoxLayout(size_hint=(1, None), height=dp(40), spacing=dp(8))
+        self.chips = {}
+        for letter in FILAS:
+            chip = FilaChip(letter)
+            chip.bind(on_release=lambda i: self._set_fila(i.letter))
+            self.chips[letter] = chip
+            chips_row.add_widget(chip)
+        panel.add_widget(chips_row)
+
+        # Teclado numerico
         keypad = GridLayout(cols=3, spacing=dp(8), size_hint=(1, None), height=dp(170))
-        keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Borrar", "0", "Aceptar"]
-        for k in keys:
-            b = RoundedButton(text=k, bg_color=COLOR_CARD_LIGHT, text_color=COLOR_TEXT,
-                               font_size="16sp", bold=(k in ("Borrar", "Aceptar")))
-            b.bind(on_release=self._make_key_handler(k))
+        for k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Borrar", "0", "Aceptar"]:
+            special = k in ("Borrar", "Aceptar")
+            b = RoundedButton(text=k, bg_color=COLOR_CARD if special else COLOR_BG,
+                              text_color=COLOR_GOLD if k == "Aceptar" else COLOR_TEXT,
+                              font_size="13sp" if special else "18sp", bold=True)
+            b.bind(on_release=lambda i, key=k: self._key(key))
             keypad.add_widget(b)
         panel.add_widget(keypad)
         body.add_widget(panel)
- 
-        self.confirm_btn = RoundedButton(text="Confirmar cajón", size_hint=(1, None), height=dp(50))
-        self.confirm_btn.bind(on_release=lambda i: self.confirm())
-        body.add_widget(self.confirm_btn)
- 
+
+        confirm_btn = RoundedButton(text="Confirmar cajón", size_hint=(1, None), height=dp(50))
+        confirm_btn.bind(on_release=lambda i: self.confirm())
+        body.add_widget(confirm_btn)
+
         root.add_widget(body)
         self.add_widget(root)
- 
-    def _make_key_handler(self, key):
-        def handler(instance):
-            if key == "Borrar":
-                self.entered = self.entered[:-1]
-            elif key == "Aceptar":
-                self.confirm()
-                return
-            elif len(self.entered) < 3:
-                self.entered += key
-            display = self.entered.ljust(3, "_")
-            self.display_lbl.text = display
-        return handler
- 
+        self._set_fila("A")
+
+    def on_pre_enter(self):
+        self.entered = ""
+        self._refresh()
+
+    def _set_fila(self, letter):
+        self.fila = letter
+        self.entered = ""
+        for L, chip in self.chips.items():
+            chip.set_active(L == letter)
+        self._refresh()
+
+    def _key(self, key):
+        if key == "Borrar":
+            self.entered = self.entered[:-1]
+        elif key == "Aceptar":
+            return self.confirm()
+        elif len(self.entered) < 2:
+            self.entered += key
+        self._refresh()
+
+    def _refresh(self):
+        self.display_lbl.text = f"{self.fila}-{self.entered.ljust(2, '_')}"
+        self.hint.color = COLOR_TEXT_MUTED
+        self.hint.text = (f"Fila {self.fila}: cajones del 01 al {FILAS[self.fila]:02d}. "
+                          "Verifica el número pintado en el piso o columna junto a tu auto.")
+
     def confirm(self):
-        if len(self.entered) == 3:
-            app = App.get_running_app()
-            app.saved_spot = self.entered
-            self.entered = ""
-            self.display_lbl.text = "___"
-            self.manager.get_screen("saved").refresh(app.saved_spot)
-            self.manager.transition = FadeTransition()
-            self.manager.current = "saved"
- 
- 
+        if not self.entered:
+            return
+        n = int(self.entered)
+        if not 1 <= n <= FILAS[self.fila]:
+            self.hint.color = COLOR_RED
+            self.hint.text = (f"El cajón {self.fila}-{n:02d} no existe. "
+                              f"La fila {self.fila} va del 01 al {FILAS[self.fila]:02d}.")
+            return
+        spot = f"{self.fila}-{n:02d}"
+        App.get_running_app().save_spot(spot)              # guarda en el celular
+        self.entered = ""
+        self._refresh()
+        self.manager.get_screen("saved").refresh(spot)     # prepara el mapa iluminado
+        self.manager.transition = FadeTransition()
+        self.manager.current = "saved"
+
+
 # ----------------------------------------------------------------------
-# 6. MAPA - CAJÓN GUARDADO CON ÉXITO
+# 6. MAPA - CAJON GUARDADO (el cajon se ilumina en el mapa)
 # ----------------------------------------------------------------------
 class SavedSpotScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.spot_number = "047"
-        self.root_body = BoxLayout(orientation="vertical")
-        self.add_widget(self.root_body)
-        self._build()
- 
-    def _build(self):
-        self.root_body.clear_widgets()
-        self.root_body.add_widget(status_bar())
- 
-        body = BoxLayout(orientation="vertical", padding=(dp(20), dp(10)), spacing=dp(10))
- 
-        header = BoxLayout(orientation="vertical", size_hint=(1, None), height=dp(46))
-        top = BoxLayout(size_hint=(1, None), height=dp(28))
-        top_title = Label(text="Nivel -1", color=COLOR_TEXT, font_size="20sp", bold=True,
-                           halign="left", valign="middle", size_hint=(0.8, 1))
-        top_title.bind(size=lambda i, v: setattr(i, "text_size", v))
-        top.add_widget(top_title)
-        compass_wrap = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(0.2, 1))
-        compass_bg = RoundedBox(bg_color=COLOR_CARD, radius=[dp(15)], size_hint=(None, None),
-                                 size=(dp(30), dp(30)))
-        compass_inner = AnchorLayout(anchor_x="center", anchor_y="center")
-        compass_inner.add_widget(CompassIcon(size_hint=(None, None), size=(dp(18), dp(18)), color_rgba=COLOR_GOLD))
-        compass_bg.add_widget(compass_inner)
-        compass_wrap.add_widget(compass_bg)
-        top.add_widget(compass_wrap)
-        header.add_widget(top)
+        self.spot = ""
+        root = BoxLayout(orientation="vertical")
+        root.add_widget(status_bar())
+
         success = BoxLayout(size_hint=(1, None), height=dp(18), spacing=dp(4))
-        success.add_widget(CheckIcon(size_hint=(None, 1), width=dp(16), color_rgba=COLOR_GREEN))
-        success.add_widget(Label(text="Cajón Guardado Con Éxito", color=COLOR_GREEN, font_size="11sp",
-                                  bold=True, halign="left"))
-        header.add_widget(success)
-        body.add_widget(header)
- 
-        self.grid = build_spot_grid(
-            ["A40", "A41", "A42", "A43", "A44"],
-            ["B45", "B46", "B47", "B48", "B49"],
-            highlighted="B" + self.spot_number[-2:] if False else None,
-        )
-        body.add_widget(self.grid)
-        # Resaltar la celda correspondiente
-        target_id = None
-        for sid in self.grid.cells:
-            if self.spot_number[-2:] in sid:
-                target_id = sid
-                break
-        if target_id:
-            self.grid.cells[target_id].set_selected(True)
- 
-        body.add_widget(facilities_row())
- 
-        info = RoundedBox(orientation="vertical", bg_color=COLOR_CARD, radius=[dp(14)],
-                           padding=dp(14), spacing=dp(8), size_hint=(1, None), height=dp(150))
-        info.add_widget(Label(text="UBICACIÓN DE TU AUTO", color=COLOR_TEXT_MUTED, font_size="10sp",
-                               bold=True, size_hint=(1, None), height=dp(16), halign="left"))
-        row = BoxLayout(size_hint=(1, None), height=dp(40))
-        self.spot_lbl = Label(text=f"Cajón {self.spot_number}", color=COLOR_TEXT, font_size="18sp",
-                               bold=True, halign="left", size_hint=(0.7, 1))
-        row.add_widget(self.spot_lbl)
-        pin = RoundedBox(bg_color=COLOR_GOLD_DARK, border_color=COLOR_GOLD, border_width=[dp(1.5)],
-                          radius=[dp(8)], size_hint=(None, None), size=(dp(34), dp(34)))
-        pin_dot_wrap = AnchorLayout(anchor_x="center", anchor_y="center")
-        pin_dot_wrap.add_widget(CarIcon(size_hint=(None, None), size=(dp(20), dp(20)), color_rgba=COLOR_GOLD))
-        pin.add_widget(pin_dot_wrap)
-        row.add_widget(pin)
-        info.add_widget(row)
-        info.add_widget(Label(text="Cerca de Escalera B, Elevador 2", color=COLOR_TEXT_MUTED,
-                               font_size="10sp", halign="left", size_hint=(1, None), height=dp(16)))
- 
-        actions = BoxLayout(size_hint=(1, None), height=dp(42), spacing=dp(10))
+        success.add_widget(DotIcon(size_hint=(None, 1), width=dp(16)))
+        success.add_widget(mk_label("Cajón Guardado Con Éxito", "11sp", COLOR_GOLD, True))
+
+        mid = BoxLayout(orientation="vertical", padding=(dp(16), dp(4), dp(16), dp(8)), spacing=dp(8))
+        mid.add_widget(nav_header("Nivel -1", success))
+        self.map = ParkingMap(size_hint=(1, 1))
+        mid.add_widget(self.map)
+        root.add_widget(mid)
+
+        dock = bottom_dock(dp(176), spacing=dp(12))
+        row = BoxLayout(size_hint=(1, None), height=dp(72))
+        info = BoxLayout(orientation="vertical", spacing=dp(2))
+        info.add_widget(mk_label("UBICACIÓN DE TU AUTO", "11sp", COLOR_GOLD, True, height=dp(16)))
+        self.spot_lbl = mk_label("Cajón", "24sp", COLOR_TEXT, True, height=dp(32))
+        info.add_widget(self.spot_lbl)
+        self.near_lbl = mk_label("", "12sp", COLOR_TEXT_MUTED, height=dp(18))
+        info.add_widget(self.near_lbl)
+        row.add_widget(info)
+        icon_wrap = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, 1), width=dp(60))
+        icon_box = RoundedBox(bg_color=COLOR_GOLD_DARK, radius=[dp(16)], size_hint=(None, None),
+                              size=(dp(56), dp(56)))
+        inner = AnchorLayout(anchor_x="center", anchor_y="center")
+        inner.add_widget(CarIcon(size_hint=(None, None), size=(dp(28), dp(28))))
+        icon_box.add_widget(inner)
+        icon_wrap.add_widget(icon_box)
+        row.add_widget(icon_wrap)
+        dock.add_widget(row)
+
+        actions = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(12))
         delete_btn = RoundedButton(text="Borrar registro", bg_color=(0.20, 0.09, 0.09, 1),
-                                    text_color=COLOR_RED, font_size="12sp")
+                                   text_color=COLOR_RED, font_size="14sp", radius=[dp(10)])
         delete_btn.bind(on_release=lambda i: self.goto_delete_confirm())
-        map_btn = RoundedButton(text="Ver Mapa", bg_color=COLOR_CARD_LIGHT,
-                                 text_color=COLOR_TEXT, font_size="12sp")
-        map_btn.bind(on_release=lambda i: None)  # ya estamos en el mapa
         actions.add_widget(delete_btn)
-        actions.add_widget(map_btn)
-        info.add_widget(actions)
- 
-        body.add_widget(info)
-        body.add_widget(BoxLayout(size_hint=(1, 1)))
- 
-        self.root_body.add_widget(body)
- 
-    def refresh(self, spot_number):
-        self.spot_number = spot_number
-        self._build()
- 
+        dock.add_widget(actions)
+
+        root.add_widget(dock)
+        self.add_widget(root)
+
+    def refresh(self, spot):
+        self.spot = spot
+        self.spot_lbl.text = f"Cajón {spot}"
+        self.near_lbl.text = f"Cerca de: {near_refs(spot)}"
+        self.map.selected = spot          # <- aqui se ilumina el cajon
+
+    def on_enter(self):
+        self.map.restart()
+
+    def on_leave(self):
+        self.map.halt()
+
     def goto_delete_confirm(self):
-        self.manager.get_screen("delete_confirm").set_spot(self.spot_number)
+        self.manager.get_screen("delete_confirm").set_spot(self.spot)
         self.manager.transition = FadeTransition()
         self.manager.current = "delete_confirm"
- 
- 
+
+
 # ----------------------------------------------------------------------
-# 7. CONFIRMACIÓN DE BORRADO (modal sobre el mapa)
+# 7. CONFIRMACION DE BORRADO
 # ----------------------------------------------------------------------
 class DeleteConfirmScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.spot_number = "047"
+        self.spot = ""
         self.overlay = FloatLayout()
         self.add_widget(self.overlay)
- 
-        # fondo oscuro semitransparente
         with self.overlay.canvas.before:
             Color(0.02, 0.03, 0.05, 0.85)
             self._bg_rect = Rectangle(pos=self.overlay.pos, size=self.overlay.size)
-        self.overlay.bind(pos=self._update_bg, size=self._update_bg)
- 
+        self.overlay.bind(pos=self._update_overlay, size=self._update_overlay)
+
         self.dialog = RoundedBox(orientation="vertical", bg_color=COLOR_CARD, radius=[dp(18)],
-                                  padding=dp(22), spacing=dp(14),
-                                  size_hint=(0.85, None), height=dp(220),
-                                  pos_hint={"center_x": 0.5, "center_y": 0.5})
- 
+                                 padding=dp(22), spacing=dp(14), size_hint=(0.85, None),
+                                 height=dp(230), pos_hint={"center_x": 0.5, "center_y": 0.5})
+
         icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(46))
-        icon_bg = RoundedBox(bg_color=(0.25, 0.08, 0.08, 1), radius=[dp(23)], size_hint=(None, None),
-                              size=(dp(46), dp(46)))
-        icon_inner = AnchorLayout(anchor_x="center", anchor_y="center")
-        icon_inner.add_widget(WarningTriangleIcon(size_hint=(None, None), size=(dp(24), dp(24)),
-                                                    color_rgba=COLOR_RED))
-        icon_bg.add_widget(icon_inner)
+        icon_bg = RoundedBox(bg_color=(0.25, 0.08, 0.08, 1), radius=[dp(23)],
+                             size_hint=(None, None), size=(dp(46), dp(46)))
+        inner = AnchorLayout(anchor_x="center", anchor_y="center")
+        inner.add_widget(WarningTriangleIcon(size_hint=(None, None), size=(dp(24), dp(24))))
+        icon_bg.add_widget(inner)
         icon_wrap.add_widget(icon_bg)
         self.dialog.add_widget(icon_wrap)
- 
-        self.question_lbl = Label(
-            text="¿Seguro que quieres borrar el registro\ndel cajón 047?",
-            color=COLOR_TEXT, font_size="14sp", bold=True, halign="center",
-            size_hint=(1, None), height=dp(44)
-        )
+
+        self.question_lbl = Label(text="", color=COLOR_TEXT, font_size="14sp", bold=True,
+                                  halign="center", size_hint=(1, None), height=dp(44))
         self.dialog.add_widget(self.question_lbl)
- 
+
         note = Label(text="Esta acción eliminará el registro resaltado de tu mapa local. "
-                           "Deberás ingresarlo nuevamente cuando reestaciones.",
+                          "Deberás ingresarlo nuevamente cuando reestaciones.",
                      color=COLOR_TEXT_MUTED, font_size="10sp", halign="center", valign="top",
                      size_hint=(1, None), height=dp(40))
         note.bind(size=lambda i, v: setattr(i, "text_size", v))
         self.dialog.add_widget(note)
- 
+
         confirm_btn = RoundedButton(text="Sí, borrar registro", bg_color=COLOR_RED,
-                                     text_color=(1, 1, 1, 1), size_hint=(1, None), height=dp(42))
+                                    text_color=(1, 1, 1, 1), size_hint=(1, None), height=dp(42))
         confirm_btn.bind(on_release=lambda i: self.confirm_delete())
         self.dialog.add_widget(confirm_btn)
- 
+
         cancel_btn = RoundedButton(text="Cancelar", bg_color=(0, 0, 0, 0), text_color=COLOR_TEXT_MUTED,
-                                    size_hint=(1, None), height=dp(30))
+                                   size_hint=(1, None), height=dp(30))
         cancel_btn.bind(on_release=lambda i: self.cancel())
         self.dialog.add_widget(cancel_btn)
- 
         self.overlay.add_widget(self.dialog)
- 
-    def _update_bg(self, *args):
+
+    def _update_overlay(self, *args):
         self._bg_rect.pos = self.overlay.pos
         self._bg_rect.size = self.overlay.size
- 
-    def set_spot(self, spot_number):
-        self.spot_number = spot_number
-        self.question_lbl.text = f"¿Seguro que quieres borrar el registro\ndel cajón {spot_number}?"
- 
+
+    def set_spot(self, spot):
+        self.spot = spot
+        self.question_lbl.text = f"¿Seguro que quieres borrar el registro\ndel cajón {spot}?"
+
     def confirm_delete(self):
-        app = App.get_running_app()
-        app.saved_spot = None
+        App.get_running_app().clear_spot()
+        self.manager.get_screen("saved").map.selected = ""   # apaga el cajon iluminado
         self.manager.transition = FadeTransition()
         self.manager.current = "empty_map"
- 
+
     def cancel(self):
         self.manager.transition = FadeTransition()
         self.manager.current = "saved"
- 
- 
+
+
 # ----------------------------------------------------------------------
 # APP
 # ----------------------------------------------------------------------
 class AlzParkingApp(App):
     saved_spot = StringProperty(allownone=True)
- 
+
     def build(self):
         self.title = "AlzParking"
         Window.clearcolor = COLOR_BG
+        self.store = JsonStore(os.path.join(self.user_data_dir, "alzparking.json"))
+
         sm = ScreenManager()
         sm.add_widget(SplashScreen(name="splash"))
         sm.add_widget(HelpScreen(name="help"))
@@ -1156,9 +1111,25 @@ class AlzParkingApp(App):
         sm.add_widget(SpotSelectionScreen(name="selection"))
         sm.add_widget(SavedSpotScreen(name="saved"))
         sm.add_widget(DeleteConfirmScreen(name="delete_confirm"))
+
+        # Si ya hay un cajon guardado, abre directo el mapa con el cajon iluminado
+        if self.store.exists("spot"):
+            spot = self.store.get("spot")["value"]
+            if spot in SPOTS:
+                self.saved_spot = spot
+                sm.get_screen("saved").refresh(spot)
+                sm.current = "saved"
         return sm
- 
- 
+
+    def save_spot(self, spot):
+        self.saved_spot = spot
+        self.store.put("spot", value=spot)
+
+    def clear_spot(self):
+        self.saved_spot = None
+        if self.store.exists("spot"):
+            self.store.delete("spot")
+
+
 if __name__ == "__main__":
     AlzParkingApp().run()
- 
