@@ -83,8 +83,6 @@ SPOTS = _build_spots()
 # y despues funciona sin senal. Si no hay internet usa el ultimo mapa
 # guardado o, en su defecto, el mapa integrado en el codigo.
 # ----------------------------------------------------------------------
-# Para probar en la PC: http://localhost:8000
-# Para el celular: pon aqui la URL publica de Render (https://....onrender.com)
 API_URL = os.environ.get("ALZ_API_URL", "https://parking-proyect.onrender.com").rstrip("/")
 NIVEL_ID = "S1"
 API_TIMEOUT = 45           # segundos (el plan gratis de Render tarda en "despertar")

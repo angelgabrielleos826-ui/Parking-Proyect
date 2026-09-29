@@ -31,6 +31,7 @@ CABECERAS_SEGURIDAD = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 }
 
