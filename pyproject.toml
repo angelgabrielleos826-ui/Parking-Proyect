@@ -4,18 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "map_loader"
-version = "0.1.0"
-description = "Librería privada para el cargado, validación y almacenamiento de mapas del microservicio Localizador de Cajón"
+version = "0.2.0"
+description = "Microservicio Localizador de Cajón: librería map_loader (carga/validación/almacenamiento de mapas) y API de consulta"
 authors = [{name = "Tu Nombre", email = "tu@correo.com"}]
 requires-python = ">=3.9"
 dependencies = [
-    "pydantic>=2.0"
+    "pydantic>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0"
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "httpx>=0.27",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+localizador_api = ["datos/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

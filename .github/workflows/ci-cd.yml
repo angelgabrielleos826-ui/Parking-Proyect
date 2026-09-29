@@ -1,0 +1,83 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Pruebas y cobertura
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # SonarCloud necesita el historial completo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -e ".[dev]"
+
+      - name: Pruebas unitarias con cobertura (mínimo 80%)
+        run: |
+          pytest --cov=map_loader --cov=localizador_api \
+                 --cov-report=term --cov-report=xml --cov-report=html \
+                 --cov-fail-under=80
+
+      - name: Guardar reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            htmlcov/
+            coverage.xml
+
+      - name: Análisis SonarCloud
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  docker:
+    name: Construir imagen Docker
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen
+        run: docker build -t localizador-cajon:${{ github.sha }} .
+
+      - name: Probar el contenedor
+        run: |
+          docker run -d --name loc -p 8000:8000 localizador-cajon:${{ github.sha }}
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          docker logs loc
+          exit 1
+
+  deploy:
+    name: Desplegar a entorno de prueba
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+    steps:
+      - name: Disparar despliegue en Render
+        if: env.RENDER_DEPLOY_HOOK != ''
+        run: curl -sf -X POST "$RENDER_DEPLOY_HOOK"
+
+      - name: Aviso si falta el secreto
+        if: env.RENDER_DEPLOY_HOOK == ''
+        run: echo "::warning::Falta el secreto RENDER_DEPLOY_HOOK; no se desplegó."

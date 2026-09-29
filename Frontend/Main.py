@@ -1,5 +1,10 @@
+import json
 import math
 import os
+import re
+import ssl
+import threading
+import urllib.request
 
 from kivy.app import App
 from kivy.core.text import Label as CoreLabel
@@ -71,6 +76,57 @@ def _build_spots():
 
 
 SPOTS = _build_spots()
+
+# ----------------------------------------------------------------------
+# CONEXION CON EL MICROSERVICIO (API Localizador de Cajon)
+# La app descarga el mapa del nivel desde la API, lo guarda en el celular
+# y despues funciona sin senal. Si no hay internet usa el ultimo mapa
+# guardado o, en su defecto, el mapa integrado en el codigo.
+# ----------------------------------------------------------------------
+# Para probar en la PC: http://localhost:8000
+# Para el celular: pon aqui la URL publica de Render (https://....onrender.com)
+API_URL = os.environ.get("ALZ_API_URL", "http://localhost:8000").rstrip("/")
+NIVEL_ID = "S1"
+API_TIMEOUT = 45           # segundos (el plan gratis de Render tarda en "despertar")
+TAMANOS = {"A": (30, 46), "E": (30, 46)}   # (ancho, alto); las demas filas: (48, 29)
+BUILTIN_SPOTS = dict(SPOTS)                # mapa integrado (respaldo)
+_ID_RE = re.compile(r"^[A-Z]-\d{2}$")
+
+
+def spots_from_api(cajones):
+    """Convierte la lista de cajones de la API en {id: (x, y, ancho, alto)}."""
+    if not isinstance(cajones, list) or not cajones:
+        raise ValueError("El servidor no devolvio cajones")
+    spots = {}
+    for c in cajones:
+        try:
+            sid = str(c["id_cajon"]).upper()
+            x, y = int(c["column_cajon"]), int(c["fila_cajon"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Cajon con formato invalido")
+        if not _ID_RE.match(sid):
+            raise ValueError(f"Id de cajon invalido: {sid}")
+        w, h = TAMANOS.get(sid[0], (48, 29))
+        spots[sid] = (x, y, w, h)
+    return spots
+
+
+def apply_spots(spots):
+    """Reemplaza el mapa en uso y recalcula cuantos cajones tiene cada fila."""
+    SPOTS.clear()
+    SPOTS.update(spots)
+    for letter in FILAS:
+        total = sum(1 for sid in spots if sid[0] == letter)
+        if total:
+            FILAS[letter] = total
+
+
+def _ssl_context():
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
 
 # Referencias: (texto, x, y, es_acceso) -> centro en el plano horizontal
 REFS = [
@@ -732,6 +788,7 @@ class HelpScreen(BaseScreen):
 class MapDownloadScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._pendiente = False
         root = BoxLayout(orientation="vertical")
         root.add_widget(status_bar())
 
@@ -749,7 +806,7 @@ class MapDownloadScreen(BaseScreen):
 
         status_wrap = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, None), height=dp(26))
         self.status_pill = RoundedBox(bg_color=(0, 0, 0, 0), radius=[dp(13)], spacing=dp(6),
-                                      padding=(dp(12), 0), size_hint=(None, None), size=(dp(220), dp(22)))
+                                      padding=(dp(12), 0), size_hint=(None, None), size=(dp(270), dp(22)))
         self.status_icon_wrap = AnchorLayout(anchor_x="center", anchor_y="center",
                                              size_hint=(None, 1), width=0)
         self.status_pill.add_widget(self.status_icon_wrap)
@@ -783,36 +840,52 @@ class MapDownloadScreen(BaseScreen):
         self.add_widget(root)
 
     def on_enter(self):
-        self.progress.set_value(15)
+        self.progress.set_value(10)
         self.btn.disabled = True
         self.btn.bg_color = COLOR_CARD_LIGHT
         self.btn.text_color = COLOR_TEXT_MUTED
+        self.title_lbl.text = "Descargando mapa del Nivel -1..."
         self.status_lbl.text = "Descargando..."
         self.status_lbl.color = COLOR_TEXT_MUTED
         self.status_pill.border_color = [0, 0, 0, 0]
         self.status_icon_wrap.clear_widgets()
         self.status_icon_wrap.width = 0
         self.download_pin.show_check = False
+        self._pendiente = True
         Clock.unschedule(self._tick)
         Clock.schedule_interval(self._tick, 0.15)
+        App.get_running_app().descargar_mapa(self._terminar)   # pide el mapa a la API
 
     def on_leave(self):
         Clock.unschedule(self._tick)
 
     def _tick(self, dt):
-        self.progress.set_value(self.progress._val + 12)
-        if self.progress._val >= 100:
-            self.status_lbl.text = "Descarga Completada"
-            self.status_lbl.color = COLOR_GOLD
-            self.status_pill.border_color = COLOR_GOLD
-            self.status_icon_wrap.width = dp(16)
-            self.status_icon_wrap.add_widget(
-                CheckIcon(size_hint=(None, None), size=(dp(12), dp(12)), color_rgba=COLOR_GOLD))
-            self.download_pin.show_check = True
-            self.btn.disabled = False
-            self.btn.bg_color = COLOR_GOLD
-            self.btn.text_color = (0.043, 0.055, 0.098, 1)
-            return False
+        # La barra avanza hasta 90% mientras se espera la respuesta del servidor
+        if self._pendiente and self.progress._val < 90:
+            self.progress.set_value(self.progress._val + 3)
+
+    def _terminar(self, origen):
+        """origen: 'servidor' (mapa nuevo), 'guardado' o 'integrado' (sin conexion)."""
+        self._pendiente = False
+        Clock.unschedule(self._tick)
+        self.progress.set_value(100)
+        textos = {
+            "servidor": "Descarga Completada",
+            "guardado": "Sin conexión: mapa guardado",
+            "integrado": "Sin conexión: mapa integrado",
+        }
+        self.title_lbl.text = "Mapa del Nivel -1 listo"
+        self.status_lbl.text = textos.get(origen, "Descarga Completada")
+        self.status_lbl.color = COLOR_GOLD
+        self.status_pill.border_color = COLOR_GOLD
+        self.status_icon_wrap.clear_widgets()
+        self.status_icon_wrap.width = dp(16)
+        self.status_icon_wrap.add_widget(
+            CheckIcon(size_hint=(None, None), size=(dp(12), dp(12)), color_rgba=COLOR_GOLD))
+        self.download_pin.show_check = True
+        self.btn.disabled = False
+        self.btn.bg_color = COLOR_GOLD
+        self.btn.text_color = (0.043, 0.055, 0.098, 1)
 
     def goto_map(self):
         self.manager.transition = SlideTransition(direction="left")
@@ -1102,6 +1175,7 @@ class AlzParkingApp(App):
         self.title = "AlzParking"
         Window.clearcolor = COLOR_BG
         self.store = JsonStore(os.path.join(self.user_data_dir, "alzparking.json"))
+        self.cargar_mapa_guardado()      # usa el ultimo mapa descargado (offline)
 
         sm = ScreenManager()
         sm.add_widget(SplashScreen(name="splash"))
@@ -1120,6 +1194,58 @@ class AlzParkingApp(App):
                 sm.get_screen("saved").refresh(spot)
                 sm.current = "saved"
         return sm
+
+    # ---------- mapa desde la API ----------
+    def cargar_mapa_guardado(self):
+        if self.store.exists("mapa"):
+            try:
+                apply_spots(spots_from_api(self.store.get("mapa")["cajones"]))
+                return True
+            except Exception:
+                pass
+        return False
+
+    def descargar_mapa(self, on_done):
+        """Pide GET /niveles/{NIVEL_ID}/cajones en un hilo aparte (no congela la UI)."""
+        def trabajo():
+            try:
+                req = urllib.request.Request(
+                    f"{API_URL}/niveles/{NIVEL_ID}/cajones",
+                    headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=API_TIMEOUT,
+                                            context=_ssl_context()) as r:
+                    datos = json.loads(r.read().decode("utf-8"))
+                spots = spots_from_api(datos)
+            except Exception as e:
+                print("[AlzParking] No se pudo descargar el mapa:", e)
+                Clock.schedule_once(lambda dt: self._mapa_sin_conexion(on_done))
+                return
+            Clock.schedule_once(lambda dt: self._mapa_descargado(datos, spots, on_done))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _mapa_descargado(self, datos, spots, on_done):
+        apply_spots(spots)
+        self.store.put("mapa", cajones=datos)      # queda guardado para usar sin senal
+        self.redibujar_mapas()
+        on_done("servidor")
+
+    def _mapa_sin_conexion(self, on_done):
+        if self.cargar_mapa_guardado():
+            origen = "guardado"
+        else:
+            apply_spots(BUILTIN_SPOTS)
+            origen = "integrado"
+        self.redibujar_mapas()
+        on_done(origen)
+
+    def redibujar_mapas(self):
+        for pantalla in self.root.screens:
+            for nombre in ("map", "bg_map"):
+                m = getattr(pantalla, nombre, None)
+                if m is not None:
+                    m._draw_static()
+                    m._draw_dyn()
 
     def save_spot(self, spot):
         self.saved_spot = spot
