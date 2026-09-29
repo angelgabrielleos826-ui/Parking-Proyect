@@ -1,0 +1,19 @@
+name: ZAP Baseline (seguridad)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Despertar el servicio (plan gratis de Render)
+        run: curl -sf --retry 10 --retry-delay 6 --max-time 60 https://parking-proyect.onrender.com/health
+
+      - name: Escaneo OWASP ZAP (baseline)
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "https://parking-proyect.onrender.com"
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: reporte-zap

@@ -85,7 +85,7 @@ SPOTS = _build_spots()
 # ----------------------------------------------------------------------
 # Para probar en la PC: http://localhost:8000
 # Para el celular: pon aqui la URL publica de Render (https://....onrender.com)
-API_URL = os.environ.get("ALZ_API_URL", "http://localhost:8000").rstrip("/")
+API_URL = os.environ.get("ALZ_API_URL", "https://parking-proyect.onrender.com").rstrip("/")
 NIVEL_ID = "S1"
 API_TIMEOUT = 45           # segundos (el plan gratis de Render tarda en "despertar")
 TAMANOS = {"A": (30, 46), "E": (30, 46)}   # (ancho, alto); las demas filas: (48, 29)
