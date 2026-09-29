@@ -1,0 +1,10 @@
+services:
+  localizador:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Opcional: ruta a otro mapa JSON dentro del contenedor
+      # MAPA_PATH: /datos/mapa.json
+      PORT: "8000"
+    restart: unless-stopped

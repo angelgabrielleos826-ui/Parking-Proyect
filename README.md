@@ -61,3 +61,37 @@ src/map_loader/
 ├── storage.py        # Guarda/recupera niveles y cajones (JSON en disco)
 └── exceptions.py    # Excepciones propias de la librería
 ```
+
+## Microservicio (API de consulta)
+
+API de **solo lectura** (`src/localizador_api`) que usa `map_loader` para ubicar un cajón.
+El mapa se carga al arrancar desde `src/localizador_api/datos/mapa.json`
+(o la ruta indicada en la variable de entorno `MAPA_PATH`).
+
+```bash
+pip install -e ".[dev]"
+uvicorn localizador_api.main:app --reload
+# Documentación interactiva: http://localhost:8000/docs
+```
+
+| Método | Ruta                          | Descripción                          |
+|--------|-------------------------------|--------------------------------------|
+| GET    | `/health`                     | Estado del servicio                  |
+| GET    | `/niveles`                    | Lista de niveles                     |
+| GET    | `/niveles/{id_nivel}/cajones` | Cajones de un nivel                  |
+| GET    | `/cajones/{id_cajon}`         | Ubicación (fila, columna) de un cajón |
+
+Sin autenticación ni ubicación en tiempo real, por diseño: el servicio no maneja
+datos personales y no expone endpoints de escritura.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+## CI/CD
+
+`.github/workflows/ci-cd.yml`: pruebas con cobertura (mínimo 80%), SonarCloud,
+build y prueba de la imagen Docker, y despliegue a Render en cada push a `main`.
+Secretos necesarios en GitHub: `SONAR_TOKEN` y `RENDER_DEPLOY_HOOK`.

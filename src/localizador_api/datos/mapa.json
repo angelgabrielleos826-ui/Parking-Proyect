@@ -1,0 +1,340 @@
+{
+ "niveles": [
+  {
+   "id_nivel": "S1",
+   "numero_nivel": 1
+  }
+ ],
+ "cajones": [
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-01",
+   "fila_cajon": 8,
+   "column_cajon": 32
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-02",
+   "fila_cajon": 8,
+   "column_cajon": 68
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-03",
+   "fila_cajon": 8,
+   "column_cajon": 104
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-04",
+   "fila_cajon": 8,
+   "column_cajon": 140
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-05",
+   "fila_cajon": 8,
+   "column_cajon": 176
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-06",
+   "fila_cajon": 8,
+   "column_cajon": 212
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-07",
+   "fila_cajon": 8,
+   "column_cajon": 248
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-08",
+   "fila_cajon": 8,
+   "column_cajon": 284
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-09",
+   "fila_cajon": 8,
+   "column_cajon": 320
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-10",
+   "fila_cajon": 8,
+   "column_cajon": 356
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-11",
+   "fila_cajon": 8,
+   "column_cajon": 392
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-12",
+   "fila_cajon": 8,
+   "column_cajon": 428
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-13",
+   "fila_cajon": 8,
+   "column_cajon": 464
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-14",
+   "fila_cajon": 8,
+   "column_cajon": 500
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-15",
+   "fila_cajon": 8,
+   "column_cajon": 536
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "A-16",
+   "fila_cajon": 8,
+   "column_cajon": 572
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-01",
+   "fila_cajon": 70,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-01",
+   "fila_cajon": 70,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-02",
+   "fila_cajon": 103,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-02",
+   "fila_cajon": 103,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-03",
+   "fila_cajon": 136,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-03",
+   "fila_cajon": 136,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-04",
+   "fila_cajon": 169,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-04",
+   "fila_cajon": 169,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-05",
+   "fila_cajon": 202,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-05",
+   "fila_cajon": 202,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-06",
+   "fila_cajon": 235,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-06",
+   "fila_cajon": 235,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-07",
+   "fila_cajon": 268,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-07",
+   "fila_cajon": 268,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-08",
+   "fila_cajon": 301,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-08",
+   "fila_cajon": 301,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "B-09",
+   "fila_cajon": 334,
+   "column_cajon": 8
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "C-09",
+   "fila_cajon": 334,
+   "column_cajon": 584
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-01",
+   "fila_cajon": 110,
+   "column_cajon": 130
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-05",
+   "fila_cajon": 110,
+   "column_cajon": 274
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-02",
+   "fila_cajon": 143,
+   "column_cajon": 130
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-06",
+   "fila_cajon": 143,
+   "column_cajon": 274
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-03",
+   "fila_cajon": 176,
+   "column_cajon": 130
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-07",
+   "fila_cajon": 176,
+   "column_cajon": 274
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-04",
+   "fila_cajon": 209,
+   "column_cajon": 130
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "D-08",
+   "fila_cajon": 209,
+   "column_cajon": 274
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "E-01",
+   "fila_cajon": 110,
+   "column_cajon": 196
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "E-02",
+   "fila_cajon": 110,
+   "column_cajon": 234
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-01",
+   "fila_cajon": 110,
+   "column_cajon": 372
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-02",
+   "fila_cajon": 143,
+   "column_cajon": 372
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-03",
+   "fila_cajon": 176,
+   "column_cajon": 372
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-04",
+   "fila_cajon": 209,
+   "column_cajon": 372
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-05",
+   "fila_cajon": 242,
+   "column_cajon": 372
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-06",
+   "fila_cajon": 110,
+   "column_cajon": 452
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-07",
+   "fila_cajon": 143,
+   "column_cajon": 452
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-08",
+   "fila_cajon": 176,
+   "column_cajon": 452
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-09",
+   "fila_cajon": 209,
+   "column_cajon": 452
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-10",
+   "fila_cajon": 242,
+   "column_cajon": 452
+  },
+  {
+   "id_nivel": "S1",
+   "id_cajon": "F-11",
+   "fila_cajon": 275,
+   "column_cajon": 452
+  }
+ ]
+}
