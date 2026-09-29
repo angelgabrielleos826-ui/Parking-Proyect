@@ -63,6 +63,7 @@ def test_cabeceras_de_seguridad(client):
     h = client.get("/health").headers
     assert h["x-content-type-options"] == "nosniff"
     assert h["x-frame-options"] == "DENY"
+    assert "max-age=31536000" in h["strict-transport-security"] 
     assert "default-src 'none'" in h["content-security-policy"]
 
 
